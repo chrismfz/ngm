@@ -27,9 +27,9 @@ php_admin_flag[expose_php] = off
 php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen
 
 ; Optional per-pool php.ini overrides:
-{{- range $k, $v := .PHPAdminValues }}
-php_admin_value[{{ $k }}] = {{ $v }}
+{{- range $p := sortedPairs .PHPAdminValues }}
+php_admin_value[{{ $p.Key }}] = {{ $p.Value }}
 {{- end }}
-{{- range $k, $v := .PHPValues }}
-php_value[{{ $k }}] = {{ $v }}
+{{- range $p := sortedPairs .PHPValues }}
+php_value[{{ $p.Key }}] = {{ $p.Value }}
 {{- end }}

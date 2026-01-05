@@ -11,6 +11,7 @@ import (
 
 	"mynginx/internal/store"
 	"mynginx/internal/users"
+	"mynginx/internal/util"
 )
 
 type SiteAddRequest struct {
@@ -28,6 +29,10 @@ type SiteAddRequest struct {
 	ClientMaxBodySize string // e.g. "32M", "128M"
 	PHPTimeRead       string // e.g. "60s", "300s"
 	PHPTimeSend       string // e.g. "60s", "300s"
+
+	// Optional: raw php.ini overrides (textarea). Stored in a per-site file, not sqlite.
+	PHPIniOverrides string
+
 
 	// For proxy mode: one per line, e.g. "127.0.0.1:8080" or "10.0.0.2:8080 50"
 	ProxyTargets []string
@@ -56,6 +61,11 @@ type SiteEditRequest struct {
 	PHPTimeRead       string
 	PHPTimeSend       string
 
+	// Optional: raw php.ini overrides textarea.
+	// If empty string => keep existing (so UI can send empty only if user explicitly cleared).
+	// We'll treat " " (spaces) as clear.
+	PHPIniOverrides *string
+
 	ApplyNow bool
 }
 
@@ -64,6 +74,34 @@ type SiteListItem struct {
 	State string // OK|PENDING|ERROR|DISABLED
 	Last  string // formatted last applied (or "-")
 }
+
+func phpOverridesPathFromWebroot(webroot string) string {
+	siteRoot := filepath.Dir(webroot) // .../<domain> (since webroot ends with /public)
+	return filepath.Join(siteRoot, ".ngm", "php.ini")
+}
+
+func writePHPOverridesFile(webroot string, raw string) error {
+	p := phpOverridesPathFromWebroot(webroot)
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	raw = strings.TrimSpace(raw)
+
+	// Clear overrides -> remove file
+	if raw == "" {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := util.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return err
+	}
+	// newline at end for nicer diffs
+	return util.WriteFileAtomic(p, []byte(raw+"\n"), 0640)
+}
+
+
+
 
 func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, error) {
 	_ = ctx
@@ -131,6 +169,11 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 		return out, err
 	}
 	out.Site = s
+
+	// Persist php.ini overrides sidecar (php-mode only)
+	if mode == "php" && req.PHPIniOverrides != "" {
+		_ = writePHPOverridesFile(wr, req.PHPIniOverrides) // best-effort
+	}
 
 	// If proxy targets were provided on create, persist them before apply.
 	if mode == "proxy" && len(req.ProxyTargets) > 0 {
@@ -319,6 +362,15 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 	if err != nil {
 		return store.Site{}, err
 	}
+
+	// Persist overrides if caller provided it (nil means "don't touch")
+	if mode == "php" && req.PHPIniOverrides != nil {
+		if err := writePHPOverridesFile(webroot, *req.PHPIniOverrides); err != nil {
+			// keep site save OK; surface later if you want via warnings
+			_ = err
+		}
+	}
+
 
 	if req.ApplyNow {
 		_, _ = a.Apply(context.Background(), ApplyRequest{Domain: d})

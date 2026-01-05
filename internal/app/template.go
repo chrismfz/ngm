@@ -6,7 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
+        "regexp"
+        "strconv"
 	"mynginx/internal/fpm"
 	"mynginx/internal/nginx"
 	"mynginx/internal/store"
@@ -55,6 +56,21 @@ func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTa
 			PHPAdminValues:          map[string]string{},
 			PHPValues:               map[string]string{},
 		}
+
+
+		// Load per-site php.ini overrides from sidecar file (no sqlite)
+		ovPath := filepath.Join(siteRoot, ".ngm", "php.ini")
+		if b, err := os.ReadFile(ovPath); err == nil {
+			admin, normal, _ := parsePHPIniOverrides(string(b))
+			for k, v := range admin {
+				poolTD.PHPAdminValues[k] = v
+			}
+			for k, v := range normal {
+				poolTD.PHPValues[k] = v
+			}
+		}
+
+
 
 		if _, _, err := fpm.EnsurePool(ver.PoolsDir, ver.Service, ver.SockDir, domain, s.PHPVersion, poolTD); err != nil {
 			return nginx.SiteTemplateData{}, fmt.Errorf("ensure fpm pool: %w", err)
@@ -213,4 +229,87 @@ func inferUserFromWebroot(homeRoot, webroot string) (string, bool) {
 		return "", false
 	}
 	return parts[0], true
+}
+
+var reIniKey = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// parsePHPIniOverrides parses textarea lines:
+//   key = value
+// Supports optional prefixes:
+//   admin:key = value   -> php_admin_value[key]
+//   value:key = value   -> php_value[key]
+// Also ignores empty lines and comment lines starting with # or ;.
+func parsePHPIniOverrides(raw string) (admin map[string]string, normal map[string]string, warnings []string) {
+        admin = map[string]string{}
+        normal = map[string]string{}
+
+        raw = strings.ReplaceAll(raw, "\r\n", "\n")
+        raw = strings.ReplaceAll(raw, "\r", "\n")
+
+        for _, line := range strings.Split(raw, "\n") {
+            l := strings.TrimSpace(line)
+            if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
+                continue
+            }
+            // split on first '='
+            i := strings.Index(l, "=")
+            if i < 0 {
+                warnings = append(warnings, "ignored (no '='): "+l)
+                continue
+            }
+            key := strings.TrimSpace(l[:i])
+            val := strings.TrimSpace(l[i+1:])
+            if key == "" {
+                warnings = append(warnings, "ignored (empty key): "+l)
+                continue
+            }
+            if val == "" {
+                // allow empty values but it's usually a mistake
+                warnings = append(warnings, "warning (empty value): "+key)
+            }
+
+            // prefix routing: admin:foo or value:foo
+            dst := "admin"
+            if p := strings.IndexByte(key, ':'); p > 0 {
+                pref := strings.ToLower(strings.TrimSpace(key[:p]))
+                rest := strings.TrimSpace(key[p+1:])
+                if pref == "admin" || pref == "php_admin_value" {
+                        dst = "admin"
+                        key = rest
+                } else if pref == "value" || pref == "php_value" {
+                        dst = "value"
+                        key = rest
+                }
+            }
+
+            key = strings.TrimSpace(key)
+            if !reIniKey.MatchString(key) {
+                warnings = append(warnings, "ignored (bad key): "+key)
+                continue
+            }
+
+            if dst == "value" {
+                normal[key] = val
+            } else {
+                admin[key] = val
+            }
+        }
+        return admin, normal, warnings
+}
+
+// parsePHPSeconds tries to parse common php.ini time values for max_execution_time-like settings.
+// Accepts: "600", "600s" (we treat suffix-less as seconds).
+func parsePHPSeconds(v string) (int, bool) {
+        v = strings.TrimSpace(strings.ToLower(v))
+        if v == "" {
+                return 0, false
+        }
+        if strings.HasSuffix(v, "s") {
+                v = strings.TrimSuffix(v, "s")
+        }
+        n, err := strconv.Atoi(strings.TrimSpace(v))
+        if err != nil || n < 0 {
+                return 0, false
+        }
+        return n, true
 }

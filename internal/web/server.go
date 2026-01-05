@@ -273,6 +273,7 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
                                 "clientmax": "",
                                 "phpread":   "",
                                 "phpsend":   "",
+                                "phpini":    "",
 			},
 		})
 		return
@@ -285,6 +286,7 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
                 clientMax := strings.TrimSpace(r.FormValue("clientmax"))
                 phpRead := strings.TrimSpace(r.FormValue("phpread"))
                 phpSend := strings.TrimSpace(r.FormValue("phpsend"))
+                phpIni := strings.TrimSpace(r.FormValue("phpini"))
 
                 if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
                         s.render(w, r, "Add Site", "site_form", map[string]any{
@@ -304,6 +306,7 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
                                         "clientmax": clientMax,
                                         "phpread":   phpRead,
                                         "phpsend":   phpSend,
+                                        "phpini":    phpIni,
                                 },
                         })
                         return
@@ -430,6 +433,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
                 clientMax := strings.TrimSpace(r.FormValue("clientmax"))
                 phpRead := strings.TrimSpace(r.FormValue("phpread"))
                 phpSend := strings.TrimSpace(r.FormValue("phpsend"))
+                phpIni := strings.TrimSpace(r.FormValue("phpini"))
 
                 if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
                         s.render(w, r, "Edit Site", "site_form", map[string]any{
@@ -447,6 +451,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
                                         "clientmax": clientMax,
                                         "phpread":   phpRead,
                                         "phpsend":   phpSend,
+                                        "phpini":    phpIni,
                                 },
                         })
                         return
@@ -502,6 +507,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
                                                         "clientmax": clientMax,
                                                         "phpread":   phpRead,
                                                         "phpsend":   phpSend,
+                                                        "phpini":    phpIni,
 						},
 					})
 					return
@@ -526,6 +532,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
                                         "clientmax": clientMax,
                                         "phpread":   phpRead,
                                         "phpsend":   phpSend,
+                                        "phpini":    phpIni,
 				},
 			})
 			return
@@ -1069,6 +1076,13 @@ const siteFormHTML = `{{define "site_form"}}
         <label>PHP Send Timeout</label>
         <input name="phpsend" value="{{index .Form "phpsend"}}" style="padding:8px;"
                placeholder="php mode only. leave blank = default (e.g. 60s). Example: 300s">
+
+        <label>PHP ini overrides (one per line)</label>
+        <textarea name="phpini" style="padding:8px; min-height:140px;"
+          placeholder="max_execution_time = 600&#10;memory_limit = 1024M&#10;upload_max_filesize = 1024M&#10;&#10;# optional: value:KEY = ... for php_value&#10;value:session.gc_maxlifetime = 1440">{{index .Form "phpini"}}</textarea>
+        <div style="grid-column: 1 / span 2; opacity:.75; font-size:13px;">
+          Stored as <code>.ngm/php.ini</code> inside the site folder (not in SQLite). Leave empty to clear.
+        </div>
 
 
 
