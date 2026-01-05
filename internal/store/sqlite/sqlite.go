@@ -8,10 +8,8 @@ import (
 	"time"
 	"strings"
 	_ "modernc.org/sqlite"
-
 	"mynginx/internal/store"
-
-       "mynginx/internal/nginx"
+	"mynginx/internal/nginx"
 
 )
 
@@ -151,7 +149,7 @@ func (s *Store) UpsertSite(site store.Site) (store.Site, error) {
 			user_id, domain, mode, webroot, php_version,
 			enable_http3, enabled
 			, client_max_body_size, php_time_read, php_time_send
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(domain) DO UPDATE SET
 			user_id=excluded.user_id,
 			mode=excluded.mode,
