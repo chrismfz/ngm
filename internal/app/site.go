@@ -24,6 +24,11 @@ type SiteAddRequest struct {
 	SkipCert  bool
 	ApplyNow  bool
 
+	// nginx knobs
+	ClientMaxBodySize string // e.g. "32M", "128M"
+	PHPTimeRead       string // e.g. "60s", "300s"
+	PHPTimeSend       string // e.g. "60s", "300s"
+
 	// For proxy mode: one per line, e.g. "127.0.0.1:8080" or "10.0.0.2:8080 50"
 	ProxyTargets []string
 
@@ -45,6 +50,11 @@ type SiteEditRequest struct {
 
 	HTTP3   *bool
 	Enabled *bool
+
+	// nginx knobs (empty = keep existing)
+	ClientMaxBodySize string
+	PHPTimeRead       string
+	PHPTimeSend       string
 
 	ApplyNow bool
 }
@@ -113,6 +123,9 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 		PHPVersion:  phpv,
 		EnableHTTP3: req.HTTP3,
 		Enabled:     true,
+		ClientMaxBodySize: strings.TrimSpace(req.ClientMaxBodySize),
+		PHPTimeRead:       strings.TrimSpace(req.PHPTimeRead),
+		PHPTimeSend:       strings.TrimSpace(req.PHPTimeSend),
 	})
 	if err != nil {
 		return out, err
@@ -276,6 +289,21 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 		enabled = *req.Enabled
 	}
 
+
+	clientMax := cur.ClientMaxBodySize
+	if strings.TrimSpace(req.ClientMaxBodySize) != "" {
+		clientMax = strings.TrimSpace(req.ClientMaxBodySize)
+	}
+	phpRead := cur.PHPTimeRead
+	if strings.TrimSpace(req.PHPTimeRead) != "" {
+		phpRead = strings.TrimSpace(req.PHPTimeRead)
+	}
+	phpSend := cur.PHPTimeSend
+	if strings.TrimSpace(req.PHPTimeSend) != "" {
+		phpSend = strings.TrimSpace(req.PHPTimeSend)
+	}
+
+
 	updated, err := a.st.UpsertSite(store.Site{
 		UserID:      userID,
 		Domain:      d,
@@ -284,6 +312,9 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 		PHPVersion:  phpv,
 		EnableHTTP3: http3,
 		Enabled:     enabled,
+		ClientMaxBodySize: clientMax,
+		PHPTimeRead:       phpRead,
+		PHPTimeSend:       phpSend,
 	})
 	if err != nil {
 		return store.Site{}, err

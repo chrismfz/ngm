@@ -34,6 +34,13 @@ type Site struct {
 	EnableHTTP3 bool
 	Enabled     bool
 
+	// Per-site nginx knobs
+	ClientMaxBodySize string // e.g. "32M", "128M"
+
+	// Per-site php mode nginx timeouts (fastcgi_*_timeout)
+	PHPTimeRead string // e.g. "60s", "300s"
+	PHPTimeSend string // e.g. "60s", "300s"
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 

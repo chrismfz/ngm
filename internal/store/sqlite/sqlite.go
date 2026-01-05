@@ -150,6 +150,7 @@ func (s *Store) UpsertSite(site store.Site) (store.Site, error) {
 		INSERT INTO sites(
 			user_id, domain, mode, webroot, php_version,
 			enable_http3, enabled
+			, client_max_body_size, php_time_read, php_time_send
 		) VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(domain) DO UPDATE SET
 			user_id=excluded.user_id,
@@ -158,10 +159,14 @@ func (s *Store) UpsertSite(site store.Site) (store.Site, error) {
 			php_version=excluded.php_version,
 			enable_http3=excluded.enable_http3,
 			enabled=excluded.enabled,
+			client_max_body_size=excluded.client_max_body_size,
+			php_time_read=excluded.php_time_read,
+			php_time_send=excluded.php_time_send,
 			updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
 	`,
 		site.UserID, site.Domain, site.Mode, site.Webroot, site.PHPVersion,
 		enableHTTP3, enabled,
+		site.ClientMaxBodySize, site.PHPTimeRead, site.PHPTimeSend,
 	)
 	if err != nil {
 		return store.Site{}, err
@@ -178,6 +183,7 @@ func (s *Store) GetSiteByDomain(domain string) (store.Site, error) {
 
 	err := s.db.QueryRow(`
 		SELECT id, user_id, domain, mode, webroot, php_version,
+		       COALESCE(client_max_body_size,''), COALESCE(php_time_read,''), COALESCE(php_time_send,''),
 		       enable_http3, enabled,
 		       created_at, updated_at,
 		       COALESCE(last_render_hash,''), COALESCE(last_apply_status,''), COALESCE(last_apply_error,''),
@@ -185,6 +191,7 @@ func (s *Store) GetSiteByDomain(domain string) (store.Site, error) {
 		FROM sites WHERE domain=?
 	`, domain).Scan(
 		&out.ID, &out.UserID, &out.Domain, &out.Mode, &out.Webroot, &out.PHPVersion,
+		&out.ClientMaxBodySize, &out.PHPTimeRead, &out.PHPTimeSend,
 		&enableHTTP3, &enabled,
 		&created, &updated,
 		&out.LastRenderHash, &out.LastApplyStatus, &out.LastApplyError,
@@ -214,6 +221,7 @@ func (s *Store) GetSiteByDomain(domain string) (store.Site, error) {
 func (s *Store) ListSites() ([]store.Site, error) {
 	rows, err := s.db.Query(`
 		SELECT id, user_id, domain, mode, webroot, php_version,
+		       COALESCE(client_max_body_size,''), COALESCE(php_time_read,''), COALESCE(php_time_send,''),
 		       enable_http3, enabled,
 		       created_at, updated_at,
 		       COALESCE(last_render_hash,''), COALESCE(last_apply_status,''), COALESCE(last_apply_error,''),
@@ -235,6 +243,7 @@ func (s *Store) ListSites() ([]store.Site, error) {
 
 		if err := rows.Scan(
 			&sitem.ID, &sitem.UserID, &sitem.Domain, &sitem.Mode, &sitem.Webroot, &sitem.PHPVersion,
+			&sitem.ClientMaxBodySize, &sitem.PHPTimeRead, &sitem.PHPTimeSend,
 			&enableHTTP3, &enabled,
 			&created, &updated,
 			&sitem.LastRenderHash, &sitem.LastApplyStatus, &sitem.LastApplyError,
@@ -358,6 +367,7 @@ func (s *Store) UpdateApplyResult(domain, status, errMsg, renderHash string) err
 func (s *Store) ListPendingSites() ([]store.Site, error) {
         rows, err := s.db.Query(`
                 SELECT id, user_id, domain, mode, webroot, php_version,
+		       COALESCE(client_max_body_size,''), COALESCE(php_time_read,''), COALESCE(php_time_send,''),
                        enable_http3, enabled,
                        created_at, updated_at,
                        COALESCE(last_render_hash,''), COALESCE(last_apply_status,''), COALESCE(last_apply_error,''),
@@ -384,6 +394,7 @@ func (s *Store) ListPendingSites() ([]store.Site, error) {
 
                 if err := rows.Scan(
                         &site.ID, &site.UserID, &site.Domain, &site.Mode, &site.Webroot, &site.PHPVersion,
+			&site.ClientMaxBodySize, &site.PHPTimeRead, &site.PHPTimeSend,
                         &enableHTTP3, &enabled,
                         &created, &updated,
                         &site.LastRenderHash, &site.LastApplyStatus, &site.LastApplyError,

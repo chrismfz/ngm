@@ -14,6 +14,10 @@ type CacheCfg struct {
 type FastCGICfg struct {
 	Pass  string
 	Cache CacheCfg
+
+	// Nginx <-> php-fpm timeouts
+	TimeRead string
+	TimeSend string
 }
 
 type UpstreamTarget struct {
@@ -46,6 +50,9 @@ type SiteTemplateData struct {
 	TLSCert        string
 	TLSKey         string
 	FrontController bool
+
+	// Nginx request body limit (eg uploads)
+	ClientMaxBodySize string
 
 	// Per-site logs (recommended)
 	AccessLog string

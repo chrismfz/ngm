@@ -93,9 +93,31 @@ func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTa
 		ErrorLog:        filepath.Join(logsDir, "error.log"),
 	}
 
+
+// Defaults so template never renders empty directives.
+// (Empty in DB means "use defaults".)
+	clientMax := strings.TrimSpace(s.ClientMaxBodySize)
+	if clientMax == "" {
+		clientMax = "32M"
+	}
+	td.ClientMaxBodySize = clientMax
+
+	phpRead := strings.TrimSpace(s.PHPTimeRead)
+	if phpRead == "" {
+		phpRead = "60s"
+	}
+	phpSend := strings.TrimSpace(s.PHPTimeSend)
+	if phpSend == "" {
+		phpSend = "60s"
+	}
+
+
+
 	if s.Mode == "" || s.Mode == "php" {
 		td.PHP = nginx.FastCGICfg{
 			Pass: phpPass,
+			TimeRead: phpRead,
+			TimeSend: phpSend,
 			Cache: nginx.CacheCfg{
 				Enabled: true,
 				Zone:    "php_cache",

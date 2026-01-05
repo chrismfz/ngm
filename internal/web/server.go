@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+        "regexp"
 	"strings"
 	"time"
 
@@ -268,6 +269,10 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 				"provision": "true",
 				"applynow":  "true",
                                 "targets":   "",
+                                // Leave blank = use defaults in template render.
+                                "clientmax": "",
+                                "phpread":   "",
+                                "phpsend":   "",
 			},
 		})
 		return
@@ -276,6 +281,34 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
                 targetsRaw := r.FormValue("targets")
                 targets := splitLines(targetsRaw)
+
+                clientMax := strings.TrimSpace(r.FormValue("clientmax"))
+                phpRead := strings.TrimSpace(r.FormValue("phpread"))
+                phpSend := strings.TrimSpace(r.FormValue("phpsend"))
+
+                if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
+                        s.render(w, r, "Add Site", "site_form", map[string]any{
+                                "Mode":  "new",
+                                "Error": errMsg,
+                                "Form": map[string]any{
+                                        "user":      strings.TrimSpace(r.FormValue("user")),
+                                        "domain":    strings.TrimSpace(r.FormValue("domain")),
+                                        "mode":      strings.TrimSpace(r.FormValue("mode")),
+                                        "php":       strings.TrimSpace(r.FormValue("php")),
+                                        "webroot":   strings.TrimSpace(r.FormValue("webroot")),
+                                        "http3":     boolStr(parseBool(r.FormValue("http3"), true)),
+                                        "provision": boolStr(parseBool(r.FormValue("provision"), true)),
+                                        "skipcert":  boolStr(parseBool(r.FormValue("skipcert"), false)),
+                                        "applynow":  boolStr(parseBool(r.FormValue("applynow"), true)),
+                                        "targets":   targetsRaw,
+                                        "clientmax": clientMax,
+                                        "phpread":   phpRead,
+                                        "phpsend":   phpSend,
+                                },
+                        })
+                        return
+                }
+
 
 		req := app.SiteAddRequest{
 			User:      strings.TrimSpace(r.FormValue("user")),
@@ -288,6 +321,9 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 			SkipCert:  parseBool(r.FormValue("skipcert"), false),
 			ApplyNow:  parseBool(r.FormValue("applynow"), true),
                         ProxyTargets: targets,
+                        ClientMaxBodySize: clientMax,
+                        PHPTimeRead:       phpRead,
+                        PHPTimeSend:       phpSend,
 		}
 
 		// Avoid "apply-now failed" warnings for proxy mode.
@@ -306,6 +342,9 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 					"skipcert":  boolStr(req.SkipCert),
 					"applynow":  boolStr(req.ApplyNow),
 					"targets":   targetsRaw,
+                                        "clientmax": clientMax,
+                                        "phpread":   phpRead,
+                                        "phpsend":   phpSend,
 				},
 			})
 			return
@@ -373,6 +412,9 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 				"http3":    boolStr(cur.EnableHTTP3),
 				"enabled":  boolStr(cur.Enabled),
 				"applynow": "false",
+                                "clientmax": cur.ClientMaxBodySize,
+                                "phpread":   cur.PHPTimeRead,
+                                "phpsend":   cur.PHPTimeSend,
 			},
 		})
 		return
@@ -385,6 +427,32 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 		enabled := parseBool(r.FormValue("enabled"), true)
 		applyNow := parseBool(r.FormValue("applynow"), false)
 
+                clientMax := strings.TrimSpace(r.FormValue("clientmax"))
+                phpRead := strings.TrimSpace(r.FormValue("phpread"))
+                phpSend := strings.TrimSpace(r.FormValue("phpsend"))
+
+                if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
+                        s.render(w, r, "Edit Site", "site_form", map[string]any{
+                                "Mode":  "edit",
+                                "Error": errMsg,
+                                "Form": map[string]any{
+                                        "domain":   domain,
+                                        "user":     strings.TrimSpace(r.FormValue("user")),
+                                        "mode":     strings.TrimSpace(r.FormValue("mode")),
+                                        "php":      strings.TrimSpace(r.FormValue("php")),
+                                        "webroot":  strings.TrimSpace(r.FormValue("webroot")),
+                                        "http3":    boolStr(http3),
+                                        "enabled":  boolStr(enabled),
+                                        "applynow": boolStr(applyNow),
+                                        "clientmax": clientMax,
+                                        "phpread":   phpRead,
+                                        "phpsend":   phpSend,
+                                },
+                        })
+                        return
+                }
+
+
 		req := app.SiteEditRequest{
 			Domain:   domain,
 			User:     strings.TrimSpace(r.FormValue("user")),
@@ -394,6 +462,9 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 			HTTP3:    &http3,
 			Enabled:  &enabled,
 			ApplyNow: applyNow,
+                        ClientMaxBodySize: clientMax,
+                        PHPTimeRead:       phpRead,
+                        PHPTimeSend:       phpSend,
 		}
 
 
@@ -428,6 +499,9 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 							"http3":    boolStr(http3),
 							"enabled":  boolStr(enabled),
 							"applynow": boolStr(applyNow),
+                                                        "clientmax": clientMax,
+                                                        "phpread":   phpRead,
+                                                        "phpsend":   phpSend,
 						},
 					})
 					return
@@ -449,6 +523,9 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 					"http3":    boolStr(http3),
 					"enabled":  boolStr(enabled),
 					"applynow": boolStr(applyNow),
+                                        "clientmax": clientMax,
+                                        "phpread":   phpRead,
+                                        "phpsend":   phpSend,
 				},
 			})
 			return
@@ -757,6 +834,30 @@ func boolStr(b bool) string {
 }
 
 
+
+var (
+        // nginx sizes like: 128m, 32M, 1g, 1024k (we keep it simple)
+        reNginxSize = regexp.MustCompile(`^\d+[kKmMgG]?$`)
+        // nginx times like: 60s, 300s, 5m, 250ms, 1h (simple subset)
+        reNginxTime = regexp.MustCompile(`^\d+(ms|s|m|h)?$`)
+)
+
+func validateNginxKnobs(clientMax, phpRead, phpSend string) string {
+        // empty is allowed => means "use defaults"
+        if clientMax != "" && !reNginxSize.MatchString(clientMax) {
+                return "Invalid Client Max Body Size. Examples: 32M, 128M, 1G (leave blank for default)."
+        }
+        if phpRead != "" && !reNginxTime.MatchString(phpRead) {
+                return "Invalid PHP Read Timeout. Examples: 60s, 300s, 5m (leave blank for default)."
+        }
+        if phpSend != "" && !reNginxTime.MatchString(phpSend) {
+                return "Invalid PHP Send Timeout. Examples: 60s, 300s, 5m (leave blank for default)."
+        }
+        return ""
+}
+
+
+
 func splitLines(s string) []string {
         s = strings.ReplaceAll(s, "\r\n", "\n")
         s = strings.ReplaceAll(s, "\r", "\n")
@@ -956,6 +1057,20 @@ const siteFormHTML = `{{define "site_form"}}
 
         <label>Webroot</label>
         <input name="webroot" value="{{index .Form "webroot"}}" style="padding:8px;" placeholder="optional">
+
+        <label>Client Max Body Size</label>
+        <input name="clientmax" value="{{index .Form "clientmax"}}" style="padding:8px;"
+               placeholder="leave blank = default (e.g. 32M). Example: 128M">
+
+        <label>PHP Read Timeout</label>
+        <input name="phpread" value="{{index .Form "phpread"}}" style="padding:8px;"
+               placeholder="php mode only. leave blank = default (e.g. 60s). Example: 300s">
+
+        <label>PHP Send Timeout</label>
+        <input name="phpsend" value="{{index .Form "phpsend"}}" style="padding:8px;"
+               placeholder="php mode only. leave blank = default (e.g. 60s). Example: 300s">
+
+
 
         <label>HTTP/3</label>
         <select name="http3" style="padding:8px;">

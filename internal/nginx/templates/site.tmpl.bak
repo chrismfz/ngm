@@ -7,14 +7,11 @@
     ssl_certificate     {{ .TLSCert }};
     ssl_certificate_key {{ .TLSKey }};
 
-    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_protocols TLSv1.3;
     ssl_early_data on;
 
     access_log {{ .AccessLog }};
     error_log  {{ .ErrorLog }};
-
-    # Allow large uploads (eg phpMyAdmin SQL imports)
-    client_max_body_size {{ .ClientMaxBodySize }};
 
     root {{ .Webroot }};
     index index.php index.html index.htm;
@@ -46,10 +43,6 @@
 	fastcgi_param HTTPS       on;
 	fastcgi_pass {{ .PHP.Pass }};
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-
-        # Long-running scripts/imports (phpMyAdmin, large exports, etc.)
-        fastcgi_read_timeout  {{ .PHP.TimeRead }};
-        fastcgi_send_timeout  {{ .PHP.TimeSend }};
 
         {{- if .PHP.Cache.Enabled }}
         # FastCGI cache (zone defined globally via fastcgi_cache_path)
@@ -138,13 +131,7 @@
         {{- end }}
 
         # Make upstream cookies HTTPS-safe behind the reverse proxy.
-        # proxy_cookie_path / "/; Secure; HttpOnly; SameSite=Lax";
-        # Cookie handling behind reverse proxy:
-        # Avoid forcing SameSite/HttpOnly globally (can break SSO/OAuth/payments and JS cookies).
-        # Default: only add Secure flag, keep upstream SameSite/HttpOnly as-is.
-        #
-        # Requires nginx with proxy_cookie_flags support.
-        proxy_cookie_flags ~ secure;
+        proxy_cookie_path / "/; Secure; HttpOnly; SameSite=Lax";
 
         proxy_connect_timeout {{ .Proxy.TimeConnect }};
         proxy_read_timeout    {{ .Proxy.TimeRead }};

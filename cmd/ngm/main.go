@@ -214,6 +214,10 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			provision = fs.Bool("provision", true, "Create linux user (if missing) + create site dirs")
 			skipCert  = fs.Bool("skip-cert", false, "Skip automatic certificate issuance")
 			applyNow  = fs.Bool("apply-now", true, "Apply this vhost immediately (needed for HTTP-01)")
+			clientMax = fs.String("client-max-body-size", "", "Nginx client_max_body_size (e.g. 32M, 128M)")
+			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
+			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
+
 		)
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -232,6 +236,9 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			Provision: *provision,
 			SkipCert:  *skipCert,
 			ApplyNow:  *applyNow,
+			ClientMaxBodySize: *clientMax,
+			PHPTimeRead:       *phpRead,
+			PHPTimeSend:       *phpSend,
 		})
 		if err != nil {
 			return err
@@ -314,6 +321,9 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			http3S  = fs.String("http3", "", "Enable HTTP/3: true|false (optional)")
 			enS     = fs.String("enabled", "", "Enabled: true|false (optional)")
 			applyNow = fs.Bool("apply-now", false, "Apply immediately after edit")
+			clientMax = fs.String("client-max-body-size", "", "Nginx client_max_body_size (e.g. 32M, 128M)")
+			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
+			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
 		)
 		if err := fs.Parse(args[1:]); err != nil { return err }
 		if strings.TrimSpace(*domain) == "" { return fmt.Errorf("required: --domain") }
@@ -338,6 +348,9 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			HTTP3: http3,
 			Enabled: enabled,
 			ApplyNow: *applyNow,
+			ClientMaxBodySize: *clientMax,
+			PHPTimeRead:       *phpRead,
+			PHPTimeSend:       *phpSend,
 		})
 		if err != nil { return err }
 		fmt.Println("OK: site updated")
@@ -348,6 +361,7 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		fmt.Printf("  php    : %s\n", updated.PHPVersion)
 		fmt.Printf("  http3  : %v\n", updated.EnableHTTP3)
 		fmt.Printf("  enabled: %v\n", updated.Enabled)
+
 		return nil
 
 
