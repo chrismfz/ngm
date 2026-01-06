@@ -77,10 +77,25 @@ type SiteListItem struct {
 
 func phpOverridesPathFromWebroot(webroot string) string {
 	siteRoot := filepath.Dir(webroot) // .../<domain> (since webroot ends with /public)
-	return filepath.Join(siteRoot, ".ngm", "php.ini")
+	// Store inside existing php/ folder:
+	return filepath.Join(siteRoot, "php", "php.ini")
 }
 
-func writePHPOverridesFile(webroot string, raw string) error {
+// ReadPHPOverridesFile loads the current overrides (if any) for UI prefilling.
+func ReadPHPOverridesFile(webroot string) (string, error) {
+	p := phpOverridesPathFromWebroot(webroot)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	// keep as-is; UI textarea can show it
+	return string(b), nil
+}
+
+func writePHPOverridesFile(webroot, ownerUser, webGroup, raw string) error {
 	p := phpOverridesPathFromWebroot(webroot)
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	raw = strings.ReplaceAll(raw, "\r", "\n")
@@ -93,11 +108,20 @@ func writePHPOverridesFile(webroot string, raw string) error {
 		}
 		return nil
 	}
-	if err := util.MkdirAll(filepath.Dir(p), 0755); err != nil {
+	dir := filepath.Dir(p)
+	if err := util.MkdirAll(dir, 0750); err != nil {
 		return err
 	}
+
+	_ = users.ChownPath(dir, ownerUser, webGroup) // best-effort
+
 	// newline at end for nicer diffs
-	return util.WriteFileAtomic(p, []byte(raw+"\n"), 0640)
+
+	if err := util.WriteFileAtomic(p, []byte(raw+"\n"), 0640); err != nil {
+		return err
+	}
+	_ = users.ChownPath(p, ownerUser, webGroup) // best-effort
+	return nil
 }
 
 
@@ -171,8 +195,12 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 	out.Site = s
 
 	// Persist php.ini overrides sidecar (php-mode only)
-	if mode == "php" && req.PHPIniOverrides != "" {
-		_ = writePHPOverridesFile(wr, req.PHPIniOverrides) // best-effort
+	if mode == "php" {
+		webGroup := a.cfg.Hosting.WebGroup
+		if webGroup == "" {
+			webGroup = "www-data"
+		}
+		_ = writePHPOverridesFile(wr, user, webGroup, req.PHPIniOverrides) // best-effort
 	}
 
 	// If proxy targets were provided on create, persist them before apply.
@@ -363,9 +391,27 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 		return store.Site{}, err
 	}
 
+
+        // Resolve owner username for chown of php overrides
+        ownerUser := ""
+        if userID != 0 {
+                if u2, err := a.st.GetUserByID(userID); err == nil {
+                        ownerUser = u2.Username
+                }
+        }
+        if ownerUser == "" {
+                ownerUser = strings.TrimSpace(req.User)
+        }
+        webGroup := a.cfg.Hosting.WebGroup
+        if webGroup == "" {
+                webGroup = "www-data"
+        }
+
+
+
 	// Persist overrides if caller provided it (nil means "don't touch")
 	if mode == "php" && req.PHPIniOverrides != nil {
-		if err := writePHPOverridesFile(webroot, *req.PHPIniOverrides); err != nil {
+                if err := writePHPOverridesFile(webroot, ownerUser, webGroup, *req.PHPIniOverrides); err != nil {
 			// keep site save OK; surface later if you want via warnings
 			_ = err
 		}

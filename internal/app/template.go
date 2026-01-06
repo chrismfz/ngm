@@ -59,7 +59,7 @@ func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTa
 
 
 		// Load per-site php.ini overrides from sidecar file (no sqlite)
-		ovPath := filepath.Join(siteRoot, ".ngm", "php.ini")
+		ovPath := filepath.Join(siteRoot, "php", "php.ini")
 		if b, err := os.ReadFile(ovPath); err == nil {
 			admin, normal, _ := parsePHPIniOverrides(string(b))
 			for k, v := range admin {

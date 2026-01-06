@@ -898,7 +898,7 @@ func splitLines(s string) []string {
 
 func phpOverridesPathFromWebroot(webroot string) string {
 	siteRoot := filepath.Dir(webroot) // .../<domain> because webroot ends with /public
-	return filepath.Join(siteRoot, ".ngm", "php.ini")
+	return filepath.Join(siteRoot, "php", "php.ini")
 }
 
 func readPHPOverridesFile(webroot string) string {
@@ -1114,7 +1114,7 @@ const siteFormHTML = `{{define "site_form"}}
         <textarea name="phpini" style="padding:8px; min-height:140px;"
           placeholder="max_execution_time = 600&#10;memory_limit = 1024M&#10;upload_max_filesize = 1024M&#10;&#10;# optional: value:KEY = ... for php_value&#10;value:session.gc_maxlifetime = 1440">{{index .Form "phpini"}}</textarea>
         <div style="grid-column: 1 / span 2; opacity:.75; font-size:13px;">
-          Stored as <code>.ngm/php.ini</code> inside the site folder (not in SQLite). Leave empty to clear.
+          Stored as <code>php/php.ini</code> inside the site folder (not in SQLite). Leave empty to clear.
         </div>
 
         <label>HTTP/3</label>

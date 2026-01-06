@@ -277,3 +277,27 @@ func touchFile(path string, perm os.FileMode) error {
 	}
 	return f.Close()
 }
+
+
+// ChownPath best-effort chown to username:webGroup. No-op when not root.
+func ChownPath(path, username, webGroup string) error {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(username) == "" {
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		return nil
+	}
+
+	uid, ugid, ok := lookupUserUIDGID(username)
+	if !ok {
+		return fmt.Errorf("cannot find user %q in /etc/passwd", username)
+	}
+
+	gid := ugid
+	if strings.TrimSpace(webGroup) != "" {
+		if g, ok := lookupGroupGID(webGroup); ok {
+			gid = g
+		}
+	}
+	return os.Chown(path, int(uid), int(gid))
+}
