@@ -1158,8 +1158,8 @@ const siteFormHTML = `{{define "site_form"}}
 
           <label>Apply Now</label>
           <select name="applynow" style="padding:8px;">
-            <option value="false" {{if eq (index .Form "applynow") "false"}}selected{{end}}>false</option>
             <option value="true" {{if eq (index .Form "applynow") "true"}}selected{{end}}>true</option>
+            <option value="false" {{if eq (index .Form "applynow") "false"}}selected{{end}}>false</option>
           </select>
         {{end}}
       </div>
