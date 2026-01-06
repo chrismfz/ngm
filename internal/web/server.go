@@ -5,8 +5,10 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
-        "regexp"
 	"strings"
 	"time"
 
@@ -42,11 +44,11 @@ func New(cfg *config.Config, paths config.Paths, st store.SiteStore) (*Server, e
 	tpl := template.New("root")
 	template.Must(tpl.New("layout").Parse(layoutHTML))
 	template.Must(tpl.New("menu").Parse(menuHTML))
-        template.Must(tpl.New("content").Parse(contentHTML))
+	template.Must(tpl.New("content").Parse(contentHTML))
 	template.Must(tpl.New("login").Parse(loginHTML))
 	template.Must(tpl.New("sites").Parse(sitesHTML))
 	template.Must(tpl.New("site_form").Parse(siteFormHTML))
-        template.Must(tpl.New("proxy_targets").Parse(proxyTargetsHTML))
+	template.Must(tpl.New("proxy_targets").Parse(proxyTargetsHTML))
 	template.Must(tpl.New("apply_form").Parse(applyFormHTML))
 	template.Must(tpl.New("apply_result").Parse(applyResultHTML))
 	template.Must(tpl.New("certs").Parse(certsHTML))
@@ -82,11 +84,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ui/sites/enable", s.requireAuth(s.handleSiteEnable))
 	mux.HandleFunc("/ui/sites/delete", s.requireAuth(s.handleSiteDelete))
 
-        // proxy targets
-        mux.HandleFunc("/ui/sites/targets", s.requireAuth(s.handleProxyTargets))
-        mux.HandleFunc("/ui/sites/targets/add", s.requireAuth(s.handleProxyTargetAdd))
-        mux.HandleFunc("/ui/sites/targets/del", s.requireAuth(s.handleProxyTargetDel))
-
+	// proxy targets
+	mux.HandleFunc("/ui/sites/targets", s.requireAuth(s.handleProxyTargets))
+	mux.HandleFunc("/ui/sites/targets/add", s.requireAuth(s.handleProxyTargetAdd))
+	mux.HandleFunc("/ui/sites/targets/del", s.requireAuth(s.handleProxyTargetDel))
 
 	// apply
 	mux.HandleFunc("/ui/apply", s.requireAuth(s.handleApply))
@@ -236,26 +237,25 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-        // Optional enrich for UI: owner username + cert info
-        owners := map[string]string{}
-        certs := map[string]any{} // domain -> *certs.CertInfo (stored as interface for templates)
-        for _, it := range items {
-                if it.Site.UserID != 0 {
-                        if u, err := s.st.GetUserByID(it.Site.UserID); err == nil {
-                                owners[it.Site.Domain] = u.Username
-                        }
-                }
-                if ci, err := s.core.CertInfo(it.Site.Domain); err == nil && ci != nil && ci.Exists {
-                        certs[it.Site.Domain] = ci
-                }
-        }
+	// Optional enrich for UI: owner username + cert info
+	owners := map[string]string{}
+	certs := map[string]any{} // domain -> *certs.CertInfo (stored as interface for templates)
+	for _, it := range items {
+		if it.Site.UserID != 0 {
+			if u, err := s.st.GetUserByID(it.Site.UserID); err == nil {
+				owners[it.Site.Domain] = u.Username
+			}
+		}
+		if ci, err := s.core.CertInfo(it.Site.Domain); err == nil && ci != nil && ci.Exists {
+			certs[it.Site.Domain] = ci
+		}
+	}
 
-        s.render(w, r, "Sites", "sites", map[string]any{
-                "Items":  items,
-                "Owners": owners,
-                "Certs":  certs,
-        })
-
+	s.render(w, r, "Sites", "sites", map[string]any{
+		"Items":  items,
+		"Owners": owners,
+		"Certs":  certs,
+	})
 }
 
 func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
@@ -268,65 +268,73 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 				"http3":     "true",
 				"provision": "true",
 				"applynow":  "true",
-                                "targets":   "",
-                                // Leave blank = use defaults in template render.
-                                "clientmax": "",
-                                "phpread":   "",
-                                "phpsend":   "",
-                                "phpini":    "",
+				"targets":   "",
+				// Leave blank = use defaults in template render.
+				"clientmax": "",
+				"phpread":   "",
+				"phpsend":   "",
+				"phpini":    "",
 			},
 		})
 		return
 
 	case http.MethodPost:
 		_ = r.ParseForm()
-                targetsRaw := r.FormValue("targets")
-                targets := splitLines(targetsRaw)
+		targetsRaw := r.FormValue("targets")
+		targets := splitLines(targetsRaw)
 
-                clientMax := strings.TrimSpace(r.FormValue("clientmax"))
-                phpRead := strings.TrimSpace(r.FormValue("phpread"))
-                phpSend := strings.TrimSpace(r.FormValue("phpsend"))
-                phpIni := strings.TrimSpace(r.FormValue("phpini"))
+		clientMax := strings.TrimSpace(r.FormValue("clientmax"))
+		phpRead := strings.TrimSpace(r.FormValue("phpread"))
+		phpSend := strings.TrimSpace(r.FormValue("phpsend"))
+		phpIni := strings.TrimSpace(r.FormValue("phpini"))
 
-                if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
-                        s.render(w, r, "Add Site", "site_form", map[string]any{
-                                "Mode":  "new",
-                                "Error": errMsg,
-                                "Form": map[string]any{
-                                        "user":      strings.TrimSpace(r.FormValue("user")),
-                                        "domain":    strings.TrimSpace(r.FormValue("domain")),
-                                        "mode":      strings.TrimSpace(r.FormValue("mode")),
-                                        "php":       strings.TrimSpace(r.FormValue("php")),
-                                        "webroot":   strings.TrimSpace(r.FormValue("webroot")),
-                                        "http3":     boolStr(parseBool(r.FormValue("http3"), true)),
-                                        "provision": boolStr(parseBool(r.FormValue("provision"), true)),
-                                        "skipcert":  boolStr(parseBool(r.FormValue("skipcert"), false)),
-                                        "applynow":  boolStr(parseBool(r.FormValue("applynow"), true)),
-                                        "targets":   targetsRaw,
-                                        "clientmax": clientMax,
-                                        "phpread":   phpRead,
-                                        "phpsend":   phpSend,
-                                        "phpini":    phpIni,
-                                },
-                        })
-                        return
-                }
+		if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
+			s.render(w, r, "Add Site", "site_form", map[string]any{
+				"Mode":  "new",
+				"Error": errMsg,
+				"Form": map[string]any{
+					"user":      strings.TrimSpace(r.FormValue("user")),
+					"domain":    strings.TrimSpace(r.FormValue("domain")),
+					"mode":      strings.TrimSpace(r.FormValue("mode")),
+					"php":       strings.TrimSpace(r.FormValue("php")),
+					"webroot":   strings.TrimSpace(r.FormValue("webroot")),
+					"http3":     boolStr(parseBool(r.FormValue("http3"), true)),
+					"provision": boolStr(parseBool(r.FormValue("provision"), true)),
+					"skipcert":  boolStr(parseBool(r.FormValue("skipcert"), false)),
+					"applynow":  boolStr(parseBool(r.FormValue("applynow"), true)),
+					"targets":   targetsRaw,
+					"clientmax": clientMax,
+					"phpread":   phpRead,
+					"phpsend":   phpSend,
+					"phpini":    phpIni,
+				},
+			})
+			return
+		}
 
+		mode := strings.TrimSpace(r.FormValue("mode"))
 
 		req := app.SiteAddRequest{
 			User:      strings.TrimSpace(r.FormValue("user")),
 			Domain:    strings.TrimSpace(r.FormValue("domain")),
-			Mode:      strings.TrimSpace(r.FormValue("mode")),
+			Mode:      mode,
 			PHP:       strings.TrimSpace(r.FormValue("php")),
 			Webroot:   strings.TrimSpace(r.FormValue("webroot")),
 			HTTP3:     parseBool(r.FormValue("http3"), true),
 			Provision: parseBool(r.FormValue("provision"), true),
 			SkipCert:  parseBool(r.FormValue("skipcert"), false),
 			ApplyNow:  parseBool(r.FormValue("applynow"), true),
-                        ProxyTargets: targets,
-                        ClientMaxBodySize: clientMax,
-                        PHPTimeRead:       phpRead,
-                        PHPTimeSend:       phpSend,
+
+			ProxyTargets:       targets,
+			ClientMaxBodySize:  clientMax,
+			PHPTimeRead:        phpRead,
+			PHPTimeSend:        phpSend,
+			PHPIniOverrides:    "",
+		}
+
+		// Only store php.ini overrides when php mode
+		if strings.TrimSpace(mode) == "php" {
+			req.PHPIniOverrides = phpIni
 		}
 
 		// Avoid "apply-now failed" warnings for proxy mode.
@@ -345,14 +353,14 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 					"skipcert":  boolStr(req.SkipCert),
 					"applynow":  boolStr(req.ApplyNow),
 					"targets":   targetsRaw,
-                                        "clientmax": clientMax,
-                                        "phpread":   phpRead,
-                                        "phpsend":   phpSend,
+					"clientmax": clientMax,
+					"phpread":   phpRead,
+					"phpsend":   phpSend,
+					"phpini":    phpIni,
 				},
 			})
 			return
 		}
-
 
 		res, err := s.core.SiteAdd(r.Context(), req)
 		if err != nil {
@@ -369,7 +377,11 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 					"provision": boolStr(req.Provision),
 					"skipcert":  boolStr(req.SkipCert),
 					"applynow":  boolStr(req.ApplyNow),
-                                        "targets":   targetsRaw,
+					"targets":   targetsRaw,
+					"clientmax": clientMax,
+					"phpread":   phpRead,
+					"phpsend":   phpSend,
+					"phpini":    phpIni,
 				},
 			})
 			return
@@ -397,27 +409,33 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-                owner := ""
-                if cur.UserID != 0 {
-                        if u, err := s.st.GetUserByID(cur.UserID); err == nil {
-                                owner = u.Username
-                        }
-                }
+		owner := ""
+		if cur.UserID != 0 {
+			if u, err := s.st.GetUserByID(cur.UserID); err == nil {
+				owner = u.Username
+			}
+		}
+
+		phpini := ""
+		if strings.TrimSpace(cur.Mode) == "php" {
+			phpini = readPHPOverridesFile(cur.Webroot)
+		}
 
 		s.render(w, r, "Edit Site", "site_form", map[string]any{
 			"Mode": "edit",
 			"Form": map[string]any{
-				"domain":   cur.Domain,
-                                "user":     owner,
-				"mode":     cur.Mode,
-				"php":      cur.PHPVersion,
-				"webroot":  cur.Webroot,
-				"http3":    boolStr(cur.EnableHTTP3),
-				"enabled":  boolStr(cur.Enabled),
-				"applynow": "false",
-                                "clientmax": cur.ClientMaxBodySize,
-                                "phpread":   cur.PHPTimeRead,
-                                "phpsend":   cur.PHPTimeSend,
+				"domain":    cur.Domain,
+				"user":      owner,
+				"mode":      cur.Mode,
+				"php":       cur.PHPVersion,
+				"webroot":   cur.Webroot,
+				"http3":     boolStr(cur.EnableHTTP3),
+				"enabled":   boolStr(cur.Enabled),
+				"applynow":  "false",
+				"clientmax": cur.ClientMaxBodySize,
+				"phpread":   cur.PHPTimeRead,
+				"phpsend":   cur.PHPTimeSend,
+				"phpini":    phpini,
 			},
 		})
 		return
@@ -426,94 +444,100 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 
 		domain := strings.TrimSpace(r.FormValue("domain"))
+		mode := strings.TrimSpace(r.FormValue("mode"))
+
 		http3 := parseBool(r.FormValue("http3"), true)
 		enabled := parseBool(r.FormValue("enabled"), true)
 		applyNow := parseBool(r.FormValue("applynow"), false)
 
-                clientMax := strings.TrimSpace(r.FormValue("clientmax"))
-                phpRead := strings.TrimSpace(r.FormValue("phpread"))
-                phpSend := strings.TrimSpace(r.FormValue("phpsend"))
-                phpIni := strings.TrimSpace(r.FormValue("phpini"))
+		clientMax := strings.TrimSpace(r.FormValue("clientmax"))
+		phpRead := strings.TrimSpace(r.FormValue("phpread"))
+		phpSend := strings.TrimSpace(r.FormValue("phpsend"))
+		phpIni := strings.TrimSpace(r.FormValue("phpini"))
 
-                if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
-                        s.render(w, r, "Edit Site", "site_form", map[string]any{
-                                "Mode":  "edit",
-                                "Error": errMsg,
-                                "Form": map[string]any{
-                                        "domain":   domain,
-                                        "user":     strings.TrimSpace(r.FormValue("user")),
-                                        "mode":     strings.TrimSpace(r.FormValue("mode")),
-                                        "php":      strings.TrimSpace(r.FormValue("php")),
-                                        "webroot":  strings.TrimSpace(r.FormValue("webroot")),
-                                        "http3":    boolStr(http3),
-                                        "enabled":  boolStr(enabled),
-                                        "applynow": boolStr(applyNow),
-                                        "clientmax": clientMax,
-                                        "phpread":   phpRead,
-                                        "phpsend":   phpSend,
-                                        "phpini":    phpIni,
-                                },
-                        })
-                        return
-                }
-
-
-		req := app.SiteEditRequest{
-			Domain:   domain,
-			User:     strings.TrimSpace(r.FormValue("user")),
-			Mode:     strings.TrimSpace(r.FormValue("mode")),
-			PHP:      strings.TrimSpace(r.FormValue("php")),
-			Webroot:  strings.TrimSpace(r.FormValue("webroot")),
-			HTTP3:    &http3,
-			Enabled:  &enabled,
-			ApplyNow: applyNow,
-                        ClientMaxBodySize: clientMax,
-                        PHPTimeRead:       phpRead,
-                        PHPTimeSend:       phpSend,
+		if errMsg := validateNginxKnobs(clientMax, phpRead, phpSend); errMsg != "" {
+			s.render(w, r, "Edit Site", "site_form", map[string]any{
+				"Mode":  "edit",
+				"Error": errMsg,
+				"Form": map[string]any{
+					"domain":    domain,
+					"user":      strings.TrimSpace(r.FormValue("user")),
+					"mode":      mode,
+					"php":       strings.TrimSpace(r.FormValue("php")),
+					"webroot":   strings.TrimSpace(r.FormValue("webroot")),
+					"http3":     boolStr(http3),
+					"enabled":   boolStr(enabled),
+					"applynow":  boolStr(applyNow),
+					"clientmax": clientMax,
+					"phpread":   phpRead,
+					"phpsend":   phpSend,
+					"phpini":    phpIni,
+				},
+			})
+			return
 		}
 
+		req := app.SiteEditRequest{
+			Domain:            domain,
+			User:              strings.TrimSpace(r.FormValue("user")),
+			Mode:              mode,
+			PHP:               strings.TrimSpace(r.FormValue("php")),
+			Webroot:            strings.TrimSpace(r.FormValue("webroot")),
+			HTTP3:             &http3,
+			Enabled:           &enabled,
+			ApplyNow:          applyNow,
+			ClientMaxBodySize: clientMax,
+			PHPTimeRead:       phpRead,
+			PHPTimeSend:       phpSend,
+		}
 
-			// If user asks ApplyNow in proxy mode, ensure at least 1 enabled target exists.
-			if strings.TrimSpace(req.Mode) == "proxy" && req.ApplyNow {
-				cur, err := s.core.SiteGet(r.Context(), req.Domain)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				tgs, err := s.st.ListProxyTargetsBySiteID(cur.ID)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				enabledCount := 0
-				for _, t := range tgs {
-					if t.Enabled {
-						enabledCount++
-					}
-				}
-				if enabledCount == 0 {
-					s.render(w, r, "Edit Site", "site_form", map[string]any{
-						"Mode":  "edit",
-						"Error": "Proxy mode requires at least 1 enabled proxy target to Apply Now. Go to Targets and add one first.",
-						"Form": map[string]any{
-							"domain":   req.Domain,
-							"user":     req.User,
-							"mode":     req.Mode,
-							"php":      req.PHP,
-							"webroot":  req.Webroot,
-							"http3":    boolStr(http3),
-							"enabled":  boolStr(enabled),
-							"applynow": boolStr(applyNow),
-                                                        "clientmax": clientMax,
-                                                        "phpread":   phpRead,
-                                                        "phpsend":   phpSend,
-                                                        "phpini":    phpIni,
-						},
-					})
-					return
+		// Only pass overrides pointer in php mode
+		if strings.TrimSpace(mode) == "php" {
+			req.PHPIniOverrides = &phpIni
+		} else {
+			req.PHPIniOverrides = nil
+		}
+
+		// If user asks ApplyNow in proxy mode, ensure at least 1 enabled target exists.
+		if strings.TrimSpace(req.Mode) == "proxy" && req.ApplyNow {
+			cur, err := s.core.SiteGet(r.Context(), req.Domain)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			tgs, err := s.st.ListProxyTargetsBySiteID(cur.ID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			enabledCount := 0
+			for _, t := range tgs {
+				if t.Enabled {
+					enabledCount++
 				}
 			}
-
+			if enabledCount == 0 {
+				s.render(w, r, "Edit Site", "site_form", map[string]any{
+					"Mode":  "edit",
+					"Error": "Proxy mode requires at least 1 enabled proxy target to Apply Now. Go to Targets and add one first.",
+					"Form": map[string]any{
+						"domain":    req.Domain,
+						"user":      req.User,
+						"mode":      req.Mode,
+						"php":       req.PHP,
+						"webroot":   req.Webroot,
+						"http3":     boolStr(http3),
+						"enabled":   boolStr(enabled),
+						"applynow":  boolStr(applyNow),
+						"clientmax": clientMax,
+						"phpread":   phpRead,
+						"phpsend":   phpSend,
+						"phpini":    phpIni,
+					},
+				})
+				return
+			}
+		}
 
 		updated, err := s.core.SiteEdit(r.Context(), req)
 		if err != nil {
@@ -521,18 +545,18 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 				"Mode":  "edit",
 				"Error": err.Error(),
 				"Form": map[string]any{
-					"domain":   req.Domain,
-					"user":     req.User,
-					"mode":     req.Mode,
-					"php":      req.PHP,
-					"webroot":  req.Webroot,
-					"http3":    boolStr(http3),
-					"enabled":  boolStr(enabled),
-					"applynow": boolStr(applyNow),
-                                        "clientmax": clientMax,
-                                        "phpread":   phpRead,
-                                        "phpsend":   phpSend,
-                                        "phpini":    phpIni,
+					"domain":    req.Domain,
+					"user":      req.User,
+					"mode":      req.Mode,
+					"php":       req.PHP,
+					"webroot":   req.Webroot,
+					"http3":     boolStr(http3),
+					"enabled":   boolStr(enabled),
+					"applynow":  boolStr(applyNow),
+					"clientmax": clientMax,
+					"phpread":   phpRead,
+					"phpsend":   phpSend,
+					"phpini":    phpIni,
 				},
 			})
 			return
@@ -563,133 +587,128 @@ func (s *Server) handleSiteDisable(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/sites", http.StatusFound)
 }
 
-
 func (s *Server) handleSiteEnable(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
-    _ = r.ParseForm()
-    domain := strings.TrimSpace(r.FormValue("domain"))
-    if _, err := s.core.SiteEnable(r.Context(), domain); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-    http.Redirect(w, r, "/ui/sites", http.StatusFound)
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	domain := strings.TrimSpace(r.FormValue("domain"))
+	if _, err := s.core.SiteEnable(r.Context(), domain); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/sites", http.StatusFound)
 }
 
 func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
-    _ = r.ParseForm()
-    domain := strings.TrimSpace(r.FormValue("domain"))
-    if err := s.core.SiteDelete(r.Context(), domain); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-    http.Redirect(w, r, "/ui/sites", http.StatusFound)
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	domain := strings.TrimSpace(r.FormValue("domain"))
+	if err := s.core.SiteDelete(r.Context(), domain); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/sites", http.StatusFound)
 }
 
 // ---------------- proxy targets ----------------
 
 func (s *Server) handleProxyTargets(w http.ResponseWriter, r *http.Request) {
-        if r.Method != http.MethodGet {
-                http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-                return
-        }
-        domain := strings.TrimSpace(r.URL.Query().Get("domain"))
-        if domain == "" {
-                http.Error(w, "domain is required", http.StatusBadRequest)
-                return
-        }
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+	if domain == "" {
+		http.Error(w, "domain is required", http.StatusBadRequest)
+		return
+	}
 
-        site, err := s.core.SiteGet(r.Context(), domain)
-        if err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
-        }
-        if strings.TrimSpace(site.Mode) != "proxy" {
-                http.Error(w, "site is not in proxy mode", http.StatusBadRequest)
-                return
-        }
+	site, err := s.core.SiteGet(r.Context(), domain)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(site.Mode) != "proxy" {
+		http.Error(w, "site is not in proxy mode", http.StatusBadRequest)
+		return
+	}
 
-        targets, err := s.st.ListProxyTargetsBySiteID(site.ID)
-        if err != nil {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-                return
-        }
+	targets, err := s.st.ListProxyTargetsBySiteID(site.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-        s.render(w, r, "Proxy Targets", "proxy_targets", map[string]any{
-                "Site":    site,
-                "Targets": targets,
-        })
+	s.render(w, r, "Proxy Targets", "proxy_targets", map[string]any{
+		"Site":    site,
+		"Targets": targets,
+	})
 }
 
 func (s *Server) handleProxyTargetAdd(w http.ResponseWriter, r *http.Request) {
-        if r.Method != http.MethodPost {
-                http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-                return
-        }
-        _ = r.ParseForm()
-        domain := strings.TrimSpace(r.FormValue("domain"))
-        target := strings.TrimSpace(r.FormValue("target"))
-        weight, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("weight")))
-        backup := parseBool(r.FormValue("backup"), false)
-        enabled := parseBool(r.FormValue("enabled"), true)
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	domain := strings.TrimSpace(r.FormValue("domain"))
+	target := strings.TrimSpace(r.FormValue("target"))
+	weight, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("weight")))
+	backup := parseBool(r.FormValue("backup"), false)
+	enabled := parseBool(r.FormValue("enabled"), true)
 
-        if domain == "" || target == "" {
-                http.Error(w, "domain and target are required", http.StatusBadRequest)
-                return
-        }
+	if domain == "" || target == "" {
+		http.Error(w, "domain and target are required", http.StatusBadRequest)
+		return
+	}
 
-        site, err := s.core.SiteGet(r.Context(), domain)
-        if err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
-        }
-        if strings.TrimSpace(site.Mode) != "proxy" {
-                http.Error(w, "site is not in proxy mode", http.StatusBadRequest)
-                return
-        }
+	site, err := s.core.SiteGet(r.Context(), domain)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(site.Mode) != "proxy" {
+		http.Error(w, "site is not in proxy mode", http.StatusBadRequest)
+		return
+	}
 
-        if err := s.st.UpsertProxyTarget(site.ID, target, weight, backup, enabled); err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
-        }
-		http.Redirect(w, r, "/ui/sites/targets?domain="+url.QueryEscape(domain), http.StatusFound)
+	if err := s.st.UpsertProxyTarget(site.ID, target, weight, backup, enabled); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/sites/targets?domain="+url.QueryEscape(domain), http.StatusFound)
 }
 
 func (s *Server) handleProxyTargetDel(w http.ResponseWriter, r *http.Request) {
-        if r.Method != http.MethodPost {
-                http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-                return
-        }
-        _ = r.ParseForm()
-        domain := strings.TrimSpace(r.FormValue("domain"))
-        target := strings.TrimSpace(r.FormValue("target"))
-        if domain == "" || target == "" {
-                http.Error(w, "domain and target are required", http.StatusBadRequest)
-                return
-        }
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	domain := strings.TrimSpace(r.FormValue("domain"))
+	target := strings.TrimSpace(r.FormValue("target"))
+	if domain == "" || target == "" {
+		http.Error(w, "domain and target are required", http.StatusBadRequest)
+		return
+	}
 
-        site, err := s.core.SiteGet(r.Context(), domain)
-        if err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
-        }
+	site, err := s.core.SiteGet(r.Context(), domain)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
-        if err := s.st.DisableProxyTarget(site.ID, target); err != nil {
-                http.Error(w, err.Error(), http.StatusBadRequest)
-                return
-        }
-		http.Redirect(w, r, "/ui/sites/targets?domain="+url.QueryEscape(domain), http.StatusFound)
+	if err := s.st.DisableProxyTarget(site.ID, target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/sites/targets?domain="+url.QueryEscape(domain), http.StatusFound)
 }
-
-
-
-
 
 // ---------------- apply ----------------
 
@@ -840,45 +859,60 @@ func boolStr(b bool) string {
 	return "false"
 }
 
-
-
 var (
-        // nginx sizes like: 128m, 32M, 1g, 1024k (we keep it simple)
-        reNginxSize = regexp.MustCompile(`^\d+[kKmMgG]?$`)
-        // nginx times like: 60s, 300s, 5m, 250ms, 1h (simple subset)
-        reNginxTime = regexp.MustCompile(`^\d+(ms|s|m|h)?$`)
+	// nginx sizes like: 128m, 32M, 1g, 1024k (we keep it simple)
+	reNginxSize = regexp.MustCompile(`^\d+[kKmMgG]?$`)
+	// nginx times like: 60s, 300s, 5m, 250ms, 1h (simple subset)
+	reNginxTime = regexp.MustCompile(`^\d+(ms|s|m|h)?$`)
 )
 
 func validateNginxKnobs(clientMax, phpRead, phpSend string) string {
-        // empty is allowed => means "use defaults"
-        if clientMax != "" && !reNginxSize.MatchString(clientMax) {
-                return "Invalid Client Max Body Size. Examples: 32M, 128M, 1G (leave blank for default)."
-        }
-        if phpRead != "" && !reNginxTime.MatchString(phpRead) {
-                return "Invalid PHP Read Timeout. Examples: 60s, 300s, 5m (leave blank for default)."
-        }
-        if phpSend != "" && !reNginxTime.MatchString(phpSend) {
-                return "Invalid PHP Send Timeout. Examples: 60s, 300s, 5m (leave blank for default)."
-        }
-        return ""
+	// empty is allowed => means "use defaults"
+	if clientMax != "" && !reNginxSize.MatchString(clientMax) {
+		return "Invalid Client Max Body Size. Examples: 32M, 128M, 1G (leave blank for default)."
+	}
+	if phpRead != "" && !reNginxTime.MatchString(phpRead) {
+		return "Invalid PHP Read Timeout. Examples: 60s, 300s, 5m (leave blank for default)."
+	}
+	if phpSend != "" && !reNginxTime.MatchString(phpSend) {
+		return "Invalid PHP Send Timeout. Examples: 60s, 300s, 5m (leave blank for default)."
+	}
+	return ""
 }
-
-
 
 func splitLines(s string) []string {
-        s = strings.ReplaceAll(s, "\r\n", "\n")
-        s = strings.ReplaceAll(s, "\r", "\n")
-        var out []string
-        for _, line := range strings.Split(s, "\n") {
-                line = strings.TrimSpace(line)
-                if line == "" {
-                        continue
-                }
-                out = append(out, line)
-        }
-        return out
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
+// ---- php.ini sidecar helpers (UI prefill) ----
+
+func phpOverridesPathFromWebroot(webroot string) string {
+	siteRoot := filepath.Dir(webroot) // .../<domain> because webroot ends with /public
+	return filepath.Join(siteRoot, ".ngm", "php.ini")
+}
+
+func readPHPOverridesFile(webroot string) string {
+	p := phpOverridesPathFromWebroot(webroot)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	raw := string(b)
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	raw = strings.TrimRight(raw, "\n") // nicer textarea
+	return raw
+}
 
 // ---------------- templates ----------------
 
@@ -918,7 +952,6 @@ const contentHTML = `{{define "content"}}
     <p>Page: <code>{{.Page}}</code></p>
   {{- end -}}
 {{end}}`
-
 
 const menuHTML = `{{define "menu"}}
   <div style="display:flex; gap:12px; align-items:center; margin-bottom:18px;">
@@ -1084,8 +1117,6 @@ const siteFormHTML = `{{define "site_form"}}
           Stored as <code>.ngm/php.ini</code> inside the site folder (not in SQLite). Leave empty to clear.
         </div>
 
-
-
         <label>HTTP/3</label>
         <select name="http3" style="padding:8px;">
           <option value="true" {{if eq (index .Form "http3") "true"}}selected{{end}}>true</option>
@@ -1140,7 +1171,6 @@ const siteFormHTML = `{{define "site_form"}}
     </form>
   {{end}}
 {{end}}`
-
 
 const proxyTargetsHTML = `{{define "proxy_targets"}}
   <h2>Proxy Targets: {{.Site.Domain}}</h2>
@@ -1214,8 +1244,6 @@ const proxyTargetsHTML = `{{define "proxy_targets"}}
   </form>
 {{end}}`
 
-
-
 const applyFormHTML = `{{define "apply_form"}}
   <h2>Apply</h2>
   <p style="opacity:.8;">Renders/publishes nginx vhosts and reloads when needed.</p>
@@ -1274,7 +1302,7 @@ const applyResultHTML = `{{define "apply_result"}}
           <td align="center">{{.Action}}</td>
           <td align="center">{{.Status}}</td>
           <td align="center">{{if .Changed}}yes{{else}}no{{end}}</td>
-	  <td><pre style="white-space:pre-wrap; margin:0;">{{.Error}}</pre></td>
+          <td><pre style="white-space:pre-wrap; margin:0;">{{.Error}}</pre></td>
         </tr>
       {{end}}
       </tbody>
@@ -1400,3 +1428,4 @@ const certCheckHTML = `{{define "cert_check"}}
 
   <p style="margin-top:14px;"><a href="/ui/certs">Back to Certificates</a></p>
 {{end}}`
+
