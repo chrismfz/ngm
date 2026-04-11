@@ -18,7 +18,7 @@ api:
 
 nginx:
   # Root of your custom Nginx installation.
-  root: "/opt/openresty/nginx"
+  root: "/usr/local/openresty/nginx"
 
   # Main nginx.conf (relative to root).
   main_conf: "conf/nginx.conf"
@@ -50,7 +50,7 @@ certs:
   email: "admin@myipnetworks.com"
 
   # Webroot used for HTTP-01 challenge files.
-  webroot: "/opt/openresty/nginx/html"
+  webroot: "/usr/local/openresty/nginx/html"
 
   # LetsEncrypt live certs directory.
   letsencrypt_live: "/etc/letsencrypt/live"
