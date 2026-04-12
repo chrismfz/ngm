@@ -188,3 +188,16 @@ git: ## Commit + push with custom message
 	git add . && \
 	git commit -m "$$MSG" && \
 	git push
+
+
+
+REMOTE_REPO_EL ?= /var/www/html/el
+
+.PHONY: repo
+repo: ## Rebuild RPM repo index on remote server
+	@echo "→ Rebuilding RPM repo on $(REMOTE_HOST)..."
+	@$(SSH_CMD) $(REMOTE_USER)@$(REMOTE_HOST) " \
+	  rsync -a --progress $(REMOTE_DIR)/rpm/*.rpm $(REMOTE_REPO_EL)/ && \
+	  createrepo --update $(REMOTE_REPO_EL) \
+	"
+	@echo "✅ Done."
