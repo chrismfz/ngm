@@ -40,10 +40,73 @@ func EnsureSystemUser(username, homeDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "useradd", "-m", "-d", homeDir, "-s", "/bin/bash", username)
+	cmd := exec.CommandContext(ctx, "useradd", "-m", "-d", homeDir, "-s", "/usr/sbin/nologin", username)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("useradd failed: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func UserExists(username string) bool { return userExists(username) }
+
+func CreateSystemUser(username string, homeDir string) error {
+	return EnsureSystemUser(username, homeDir)
+}
+
+func SetSystemPassword(username, password string) error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "chpasswd")
+	cmd.Stdin = strings.NewReader(username + ":" + password + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("chpasswd failed: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func SuspendSystemUser(username string) error {
+	if !userExists(username) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "usermod", "-L", username)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("usermod -L failed: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func UnsuspendSystemUser(username string) error {
+	if !userExists(username) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "usermod", "-U", username)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("usermod -U failed: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func DeleteSystemUser(username string) error {
+	if !userExists(username) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "userdel", "-r", username)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("userdel -r failed: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -86,16 +149,20 @@ func EnsureHomeTraversal(username, homeDir, webGroup string) error {
 }
 
 // EnsureSiteDirs creates the site layout around webroot:
-//   <siteRoot>/public (webroot)
-//   <siteRoot>/logs (+ access.log/error.log)
-//   <siteRoot>/tmp
-//   <siteRoot>/php
+//
+//	<siteRoot>/public (webroot)
+//	<siteRoot>/logs (+ access.log/error.log)
+//	<siteRoot>/tmp
+//	<siteRoot>/php
 //
 // Ownership model (root run):
-//   owner: username
-//   group: webGroup (e.g. www-data)
+//
+//	owner: username
+//	group: webGroup (e.g. www-data)
+//
 // Permissions:
-//   dirs: 0750, files: 0640
+//
+//	dirs: 0750, files: 0640
 func EnsureSiteDirs(username, homeDir, webroot, webGroup string) (SiteDirs, error) {
 	webroot = filepath.Clean(strings.TrimSpace(webroot))
 	if webroot == "" || webroot == "/" {
@@ -277,7 +344,6 @@ func touchFile(path string, perm os.FileMode) error {
 	}
 	return f.Close()
 }
-
 
 // ChownPath best-effort chown to username:webGroup. No-op when not root.
 func ChownPath(path, username, webGroup string) error {

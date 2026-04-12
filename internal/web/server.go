@@ -15,8 +15,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"mynginx/internal/app"
+	"mynginx/internal/auth"
 	"mynginx/internal/config"
 	"mynginx/internal/store"
+	"mynginx/internal/users"
 )
 
 const cookieName = "ngm_session"
@@ -54,6 +56,13 @@ func New(cfg *config.Config, paths config.Paths, st store.SiteStore) (*Server, e
 	template.Must(tpl.New("certs").Parse(certsHTML))
 	template.Must(tpl.New("cert_info").Parse(certInfoHTML))
 	template.Must(tpl.New("cert_check").Parse(certCheckHTML))
+	template.Must(tpl.New("dashboard").Parse(dashboardHTML))
+	template.Must(tpl.New("packages").Parse(packagesHTML))
+	template.Must(tpl.New("package_form").Parse(packageFormHTML))
+	template.Must(tpl.New("users").Parse(usersHTML))
+	template.Must(tpl.New("user_form").Parse(userFormHTML))
+	template.Must(tpl.New("resellers").Parse(resellersHTML))
+	template.Must(tpl.New("reseller_form").Parse(resellerFormHTML))
 
 	return &Server{
 		cfg:      cfg,
@@ -69,12 +78,13 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui/sites", http.StatusFound)
+		http.Redirect(w, r, "/ui/dashboard", http.StatusFound)
 	})
 
 	// auth
 	mux.HandleFunc("/ui/login", s.handleLogin)
 	mux.HandleFunc("/ui/logout", s.requireAuth(s.handleLogout))
+	mux.HandleFunc("/ui/dashboard", s.requireAuth(s.handleDashboard))
 
 	// sites
 	mux.HandleFunc("/ui/sites", s.requireAuth(s.handleSites))
@@ -98,6 +108,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ui/cert/issue", s.requireAuth(s.handleCertIssue))
 	mux.HandleFunc("/ui/cert/renew", s.requireAuth(s.handleCertRenew))
 	mux.HandleFunc("/ui/cert/check", s.requireAuth(s.handleCertCheck))
+	mux.HandleFunc("/ui/packages", s.requireAuth(s.requireRole("admin", "reseller")(s.handlePackages)))
+	mux.HandleFunc("/ui/packages/new", s.requireAuth(s.requireRole("admin", "reseller")(s.handlePackageNew)))
+	mux.HandleFunc("/ui/packages/edit", s.requireAuth(s.requireRole("admin", "reseller")(s.handlePackageEdit)))
+	mux.HandleFunc("/ui/packages/delete", s.requireAuth(s.requireRole("admin", "reseller")(s.handlePackageDelete)))
+	mux.HandleFunc("/ui/users", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUsers)))
+	mux.HandleFunc("/ui/users/new", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserNew)))
+	mux.HandleFunc("/ui/users/suspend", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserSuspend)))
+	mux.HandleFunc("/ui/users/delete", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserDelete)))
+	mux.HandleFunc("/ui/resellers", s.requireAuth(s.requireRole("admin")(s.handleResellers)))
+	mux.HandleFunc("/ui/resellers/new", s.requireAuth(s.requireRole("admin")(s.handleResellerNew)))
 
 	return mux
 }
@@ -127,6 +147,25 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (s *Server) requireRole(roles ...string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			sess, ok := s.sessionFromCtx(r)
+			if !ok {
+				http.Redirect(w, r, "/ui/login", http.StatusFound)
+				return
+			}
+			for _, role := range roles {
+				if sess.Role == role {
+					next(w, r)
+					return
+				}
+			}
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}
+	}
+}
+
 func (s *Server) sessionFromCtx(r *http.Request) (Session, bool) {
 	v := r.Context().Value(ctxSession)
 	if v == nil {
@@ -142,6 +181,28 @@ func (s *Server) currentSession(r *http.Request) (Session, bool) {
 		return Session{}, false
 	}
 	return s.sessions.Get(strings.TrimSpace(c.Value))
+}
+
+func (s *Server) siteVisibleToSession(ctx context.Context, sess Session, domain string) bool {
+	if sess.Role == "admin" {
+		return true
+	}
+	site, err := s.core.SiteGet(ctx, domain)
+	if err != nil {
+		return false
+	}
+	u, err := s.st.GetUserByID(site.UserID)
+	if err != nil {
+		return false
+	}
+	pu, err := s.st.GetPanelUserByUsername(u.Username)
+	if err != nil {
+		return false
+	}
+	if sess.Role == "user" {
+		return pu.ID == sess.UserID
+	}
+	return pu.ResellerID != nil && *pu.ResellerID == sess.UserID
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
@@ -193,14 +254,37 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		username := strings.TrimSpace(r.FormValue("username"))
 		pass := r.FormValue("password")
+		msgInvalid := "Invalid credentials"
+		msgLocked := "Account temporarily locked, try again later"
 
 		u, err := s.st.GetPanelUserByUsername(username)
 		if err != nil || !u.Enabled {
-			_ = s.tpl.ExecuteTemplate(w, "login", map[string]any{"Error": "Invalid credentials"})
+			_ = s.tpl.ExecuteTemplate(w, "login", map[string]any{"Error": msgInvalid})
 			return
 		}
-		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(pass)) != nil {
-			_ = s.tpl.ExecuteTemplate(w, "login", map[string]any{"Error": "Invalid credentials"})
+		if u.LockedUntil != nil && u.LockedUntil.After(time.Now().UTC()) {
+			_ = s.tpl.ExecuteTemplate(w, "login", map[string]any{"Error": msgLocked})
+			return
+		}
+		var authErr error
+		if u.Role == "user" {
+			systemUser := strings.TrimSpace(u.SystemUser)
+			if systemUser == "" {
+				systemUser = u.Username
+			}
+			authErr = auth.VerifyShadowPassword(systemUser, pass)
+		} else {
+			authErr = bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(pass))
+		}
+		if authErr != nil {
+			_ = s.st.IncrementFailedAttempts(u.ID)
+			failed := u.FailedAttempts + 1
+			if failed >= 5 {
+				_ = s.st.LockPanelUser(u.ID, time.Now().UTC().Add(15*time.Minute))
+				_ = s.tpl.ExecuteTemplate(w, "login", map[string]any{"Error": msgLocked})
+				return
+			}
+			_ = s.tpl.ExecuteTemplate(w, "login", map[string]any{"Error": msgInvalid})
 			return
 		}
 
@@ -210,9 +294,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		_ = s.st.ResetFailedAttempts(u.ID)
 		_ = s.st.UpdatePanelUserLastLogin(u.ID)
 		s.setSessionCookie(w, r, sess.Token)
-		http.Redirect(w, r, "/ui/sites", http.StatusFound)
+		http.Redirect(w, r, "/ui/dashboard", http.StatusFound)
 		return
 
 	default:
@@ -232,6 +317,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // ---------------- sites ----------------
 
 func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
+	sess, _ := s.sessionFromCtx(r)
 	items, err := s.core.SiteList(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -240,19 +326,30 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 	// Optional enrich for UI: owner username + cert info
 	owners := map[string]string{}
 	certs := map[string]any{} // domain -> *certs.CertInfo (stored as interface for templates)
+	filtered := make([]app.SiteListItem, 0, len(items))
 	for _, it := range items {
 		if it.Site.UserID != 0 {
 			if u, err := s.st.GetUserByID(it.Site.UserID); err == nil {
 				owners[it.Site.Domain] = u.Username
+				if sess.Role == "user" && u.Username != sess.Username {
+					continue
+				}
+				if sess.Role == "reseller" {
+					pu, err := s.st.GetPanelUserByUsername(u.Username)
+					if err != nil || pu.ResellerID == nil || *pu.ResellerID != sess.UserID {
+						continue
+					}
+				}
 			}
 		}
 		if ci, err := s.core.CertInfo(it.Site.Domain); err == nil && ci != nil && ci.Exists {
 			certs[it.Site.Domain] = ci
 		}
+		filtered = append(filtered, it)
 	}
 
 	s.render(w, r, "Sites", "sites", map[string]any{
-		"Items":  items,
+		"Items":  filtered,
 		"Owners": owners,
 		"Certs":  certs,
 	})
@@ -325,11 +422,11 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 			SkipCert:  parseBool(r.FormValue("skipcert"), false),
 			ApplyNow:  parseBool(r.FormValue("applynow"), true),
 
-			ProxyTargets:       targets,
-			ClientMaxBodySize:  clientMax,
-			PHPTimeRead:        phpRead,
-			PHPTimeSend:        phpSend,
-			PHPIniOverrides:    "",
+			ProxyTargets:      targets,
+			ClientMaxBodySize: clientMax,
+			PHPTimeRead:       phpRead,
+			PHPTimeSend:       phpSend,
+			PHPIniOverrides:   "",
 		}
 
 		// Only store php.ini overrides when php mode
@@ -403,6 +500,11 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		d := strings.TrimSpace(r.URL.Query().Get("domain"))
+		sess, _ := s.sessionFromCtx(r)
+		if !s.siteVisibleToSession(r.Context(), sess, d) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		cur, err := s.core.SiteGet(r.Context(), d)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -444,6 +546,11 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 
 		domain := strings.TrimSpace(r.FormValue("domain"))
+		sess, _ := s.sessionFromCtx(r)
+		if !s.siteVisibleToSession(r.Context(), sess, domain) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		mode := strings.TrimSpace(r.FormValue("mode"))
 
 		http3 := parseBool(r.FormValue("http3"), true)
@@ -482,7 +589,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 			User:              strings.TrimSpace(r.FormValue("user")),
 			Mode:              mode,
 			PHP:               strings.TrimSpace(r.FormValue("php")),
-			Webroot:            strings.TrimSpace(r.FormValue("webroot")),
+			Webroot:           strings.TrimSpace(r.FormValue("webroot")),
 			HTTP3:             &http3,
 			Enabled:           &enabled,
 			ApplyNow:          applyNow,
@@ -580,6 +687,11 @@ func (s *Server) handleSiteDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	domain := strings.TrimSpace(r.FormValue("domain"))
+	sess, _ := s.sessionFromCtx(r)
+	if !s.siteVisibleToSession(r.Context(), sess, domain) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if err := s.core.SiteDisable(r.Context(), domain); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -594,6 +706,11 @@ func (s *Server) handleSiteEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	domain := strings.TrimSpace(r.FormValue("domain"))
+	sess, _ := s.sessionFromCtx(r)
+	if !s.siteVisibleToSession(r.Context(), sess, domain) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if _, err := s.core.SiteEnable(r.Context(), domain); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -608,6 +725,11 @@ func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	domain := strings.TrimSpace(r.FormValue("domain"))
+	sess, _ := s.sessionFromCtx(r)
+	if !s.siteVisibleToSession(r.Context(), sess, domain) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if err := s.core.SiteDelete(r.Context(), domain); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -623,6 +745,11 @@ func (s *Server) handleProxyTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
+	sess, _ := s.sessionFromCtx(r)
+	if !s.siteVisibleToSession(r.Context(), sess, domain) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if domain == "" {
 		http.Error(w, "domain is required", http.StatusBadRequest)
 		return
@@ -720,10 +847,22 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		_ = r.ParseForm()
+		sess, _ := s.sessionFromCtx(r)
 		domain := strings.TrimSpace(r.FormValue("domain"))
 		all := parseBool(r.FormValue("all"), false)
 		dry := parseBool(r.FormValue("dry"), false)
 		limit, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("limit")))
+		if sess.Role != "admin" {
+			all = false
+			if domain == "" {
+				http.Error(w, "domain is required", http.StatusBadRequest)
+				return
+			}
+			if !s.siteVisibleToSession(r.Context(), sess, domain) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
 
 		res, err := s.core.Apply(r.Context(), app.ApplyRequest{
 			Domain: domain,
@@ -761,6 +900,16 @@ func (s *Server) handleCerts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	sess, _ := s.sessionFromCtx(r)
+	if sess.Role != "admin" {
+		filtered := items[:0]
+		for _, it := range items {
+			if s.siteVisibleToSession(r.Context(), sess, it.Domain) {
+				filtered = append(filtered, it)
+			}
+		}
+		items = filtered
+	}
 	s.render(w, r, "Certificates", "certs", map[string]any{"Items": items})
 }
 
@@ -770,6 +919,11 @@ func (s *Server) handleCertInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := strings.TrimSpace(r.URL.Query().Get("domain"))
+	sess, _ := s.sessionFromCtx(r)
+	if !s.siteVisibleToSession(r.Context(), sess, d) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	info, err := s.core.CertInfo(d)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -785,6 +939,11 @@ func (s *Server) handleCertIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	d := strings.TrimSpace(r.FormValue("domain"))
+	sess, _ := s.sessionFromCtx(r)
+	if !s.siteVisibleToSession(r.Context(), sess, d) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if d == "" {
 		http.Error(w, "domain is required", http.StatusBadRequest)
 		return
@@ -807,6 +966,14 @@ func (s *Server) handleCertRenew(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	d := strings.TrimSpace(r.FormValue("domain"))
 	all := parseBool(r.FormValue("all"), false)
+	sess, _ := s.sessionFromCtx(r)
+	if sess.Role != "admin" {
+		all = false
+		if d == "" || !s.siteVisibleToSession(r.Context(), sess, d) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
@@ -836,10 +1003,196 @@ func (s *Server) handleCertCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	sess, _ := s.sessionFromCtx(r)
+	if sess.Role != "admin" {
+		filtered := items[:0]
+		for _, it := range items {
+			if s.siteVisibleToSession(r.Context(), sess, it.Domain) {
+				filtered = append(filtered, it)
+			}
+		}
+		items = filtered
+	}
 	s.render(w, r, "Cert Check", "cert_check", map[string]any{
 		"Days":  days,
 		"Items": items,
 	})
+}
+
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	sess, _ := s.sessionFromCtx(r)
+	allUsers, _ := s.st.ListPanelUsers()
+	items, _ := s.core.SiteList(r.Context())
+	data := map[string]any{"Role": sess.Role}
+	if sess.Role == "admin" {
+		var resellers, users int
+		for _, u := range allUsers {
+			if u.Role == "reseller" {
+				resellers++
+			}
+			if u.Role == "user" {
+				users++
+			}
+		}
+		data["Resellers"] = resellers
+		data["Users"] = users
+		data["Domains"] = len(items)
+	} else if sess.Role == "reseller" {
+		countUsers, countDomains := 0, 0
+		for _, pu := range allUsers {
+			if pu.Role == "user" && pu.ResellerID != nil && *pu.ResellerID == sess.UserID {
+				countUsers++
+			}
+		}
+		for _, it := range items {
+			if s.siteVisibleToSession(r.Context(), sess, it.Site.Domain) {
+				countDomains++
+			}
+		}
+		data["Users"] = countUsers
+		data["Domains"] = countDomains
+	} else {
+		countDomains := 0
+		for _, it := range items {
+			if s.siteVisibleToSession(r.Context(), sess, it.Site.Domain) {
+				countDomains++
+			}
+		}
+		data["Domains"] = countDomains
+	}
+	s.render(w, r, "Dashboard", "dashboard", data)
+}
+
+func (s *Server) handlePackages(w http.ResponseWriter, r *http.Request) {
+	pkgs, err := s.st.ListPackages()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sess, _ := s.sessionFromCtx(r)
+	if sess.Role == "reseller" {
+		filtered := pkgs[:0]
+		for _, p := range pkgs {
+			if p.CreatedBy != nil && *p.CreatedBy == sess.UserID {
+				filtered = append(filtered, p)
+			}
+		}
+		pkgs = filtered
+	}
+	s.render(w, r, "Packages", "packages", map[string]any{"Items": pkgs})
+}
+
+func (s *Server) handlePackageNew(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.render(w, r, "New Package", "package_form", map[string]any{"Mode": "new"})
+		return
+	}
+	_ = r.ParseForm()
+	sess, _ := s.sessionFromCtx(r)
+	p := store.Package{Name: strings.TrimSpace(r.FormValue("name")), CreatedBy: &sess.UserID, MaxDomains: 5, MaxSubdomains: 20, MaxDiskMB: 1024, MaxPHPWorkers: 5, MaxMySQLDBs: 1, MaxMySQLUsers: 2}
+	_, err := s.st.CreatePackage(p)
+	if err != nil {
+		s.render(w, r, "New Package", "package_form", map[string]any{"Mode": "new", "Error": err.Error()})
+		return
+	}
+	http.Redirect(w, r, "/ui/packages", http.StatusFound)
+}
+
+func (s *Server) handlePackageEdit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	p, err := s.st.GetPackageByID(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	p.Name = strings.TrimSpace(r.FormValue("name"))
+	if _, err := s.st.UpdatePackage(p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/packages", http.StatusFound)
+}
+
+func (s *Server) handlePackageDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	id, _ := strconv.ParseInt(r.FormValue("id"), 10, 64)
+	if err := s.st.DeletePackage(id); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/packages", http.StatusFound)
+}
+
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.st.ListPanelUsers()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sess, _ := s.sessionFromCtx(r)
+	filtered := users[:0]
+	for _, u := range users {
+		if u.Role != "user" {
+			continue
+		}
+		if sess.Role == "reseller" && (u.ResellerID == nil || *u.ResellerID != sess.UserID) {
+			continue
+		}
+		filtered = append(filtered, u)
+	}
+	s.render(w, r, "Users", "users", map[string]any{"Items": filtered})
+}
+
+func (s *Server) handleUserNew(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.render(w, r, "New User", "user_form", map[string]any{})
+		return
+	}
+	_ = r.ParseForm()
+	sess, _ := s.sessionFromCtx(r)
+	username := strings.TrimSpace(r.FormValue("username"))
+	pass := r.FormValue("password")
+	pu, err := s.st.CreatePanelUser(username, "$SHADOW$", "user", true)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	pu.SystemUser = username
+	pu.CreatedBy = &sess.UserID
+	if sess.Role == "reseller" {
+		pu.ResellerID = &sess.UserID
+		pu.OwnerID = &sess.UserID
+	}
+	if _, err := s.st.UpdatePanelUser(pu); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	home := filepath.Join(s.cfg.Hosting.HomeRoot, username)
+	_ = users.CreateSystemUser(username, home)
+	_ = users.SetSystemPassword(username, pass)
+	http.Redirect(w, r, "/ui/users", http.StatusFound)
+}
+
+func (s *Server) handleUserSuspend(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/ui/users", http.StatusFound)
+}
+func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/ui/users", http.StatusFound)
+}
+func (s *Server) handleResellers(w http.ResponseWriter, r *http.Request) {
+	s.render(w, r, "Resellers", "resellers", map[string]any{})
+}
+func (s *Server) handleResellerNew(w http.ResponseWriter, r *http.Request) {
+	s.render(w, r, "New Reseller", "reseller_form", map[string]any{})
 }
 
 // ---------------- helpers ----------------
@@ -933,6 +1286,20 @@ const layoutHTML = `<!doctype html>
 const contentHTML = `{{define "content"}}
   {{- if eq .Page "sites" -}}
     {{template "sites" .}}
+  {{- else if eq .Page "dashboard" -}}
+    {{template "dashboard" .}}
+  {{- else if eq .Page "packages" -}}
+    {{template "packages" .}}
+  {{- else if eq .Page "package_form" -}}
+    {{template "package_form" .}}
+  {{- else if eq .Page "users" -}}
+    {{template "users" .}}
+  {{- else if eq .Page "user_form" -}}
+    {{template "user_form" .}}
+  {{- else if eq .Page "resellers" -}}
+    {{template "resellers" .}}
+  {{- else if eq .Page "reseller_form" -}}
+    {{template "reseller_form" .}}
   {{- else if eq .Page "site_form" -}}
     {{template "site_form" .}}
   {{- else if eq .Page "apply_form" -}}
@@ -956,10 +1323,23 @@ const contentHTML = `{{define "content"}}
 const menuHTML = `{{define "menu"}}
   <div style="display:flex; gap:12px; align-items:center; margin-bottom:18px;">
     <div style="font-weight:700;">NGM</div>
-    <a href="/ui/sites">Sites</a>
-    <a href="/ui/sites/new">Add Site</a>
-    <a href="/ui/apply">Apply</a>
-    <a href="/ui/certs">Certificates</a>
+    <a href="/ui/dashboard">Dashboard</a>
+    {{if eq .Session.Role "admin"}}
+      <a href="/ui/resellers">Resellers</a>
+      <a href="/ui/users">Users</a>
+      <a href="/ui/packages">Packages</a>
+      <a href="/ui/sites">Sites</a>
+      <a href="/ui/certs">Certificates</a>
+      <a href="/ui/apply">Apply</a>
+    {{else if eq .Session.Role "reseller"}}
+      <a href="/ui/users">My Users</a>
+      <a href="/ui/packages">Packages</a>
+      <a href="/ui/sites">Sites</a>
+      <a href="/ui/certs">Certificates</a>
+    {{else}}
+      <a href="/ui/sites">My Domains</a>
+      <a href="/ui/certs">Certificates</a>
+    {{end}}
 
     <div style="margin-left:auto; display:flex; gap:10px; align-items:center;">
       <div style="opacity:.75;">{{.Session.Username}}</div>
@@ -985,6 +1365,53 @@ const loginHTML = `<!doctype html>
     <button style="padding:10px 14px;">Login</button>
   </form>
 </body></html>`
+
+const dashboardHTML = `{{define "dashboard"}}
+<h2>Dashboard</h2>
+{{if eq .Role "admin"}}
+<ul><li>Resellers: {{.Resellers}}</li><li>Users: {{.Users}}</li><li>Domains: {{.Domains}}</li></ul>
+{{else if eq .Role "reseller"}}
+<ul><li>My users: {{.Users}}</li><li>My domains: {{.Domains}}</li></ul>
+{{else}}
+<ul><li>My domains: {{.Domains}}</li></ul>
+{{end}}
+{{end}}`
+
+const packagesHTML = `{{define "packages"}}
+<h2>Packages</h2>
+<p><a href="/ui/packages/new">New package</a></p>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>ID</th><th>Name</th><th>Actions</th></tr>
+{{range .Items}}<tr><td>{{.ID}}</td><td>{{.Name}}</td><td>
+<form method="post" action="/ui/packages/edit" style="display:inline"><input type="hidden" name="id" value="{{.ID}}"><input name="name" value="{{.Name}}"><button>Rename</button></form>
+<form method="post" action="/ui/packages/delete" style="display:inline"><input type="hidden" name="id" value="{{.ID}}"><button>Delete</button></form>
+</td></tr>{{end}}
+</table>
+{{end}}`
+
+const packageFormHTML = `{{define "package_form"}}
+<h2>New package</h2>
+{{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
+<form method="post" action="/ui/packages/new">
+<input name="name" placeholder="package name"><button>Create</button>
+</form>{{end}}`
+
+const usersHTML = `{{define "users"}}
+<h2>Users</h2><p><a href="/ui/users/new">New user</a></p>
+<table border="1" cellpadding="6" cellspacing="0"><tr><th>ID</th><th>Username</th><th>Enabled</th></tr>
+{{range .Items}}<tr><td>{{.ID}}</td><td>{{.Username}}</td><td>{{.Enabled}}</td></tr>{{end}}
+</table>{{end}}`
+
+const userFormHTML = `{{define "user_form"}}
+<h2>New user</h2>
+<form method="post" action="/ui/users/new">
+<input name="username" placeholder="username">
+<input type="password" name="password" placeholder="password">
+<button>Create</button>
+</form>{{end}}`
+
+const resellersHTML = `{{define "resellers"}}<h2>Resellers</h2><p><a href="/ui/resellers/new">New reseller</a></p>{{end}}`
+const resellerFormHTML = `{{define "reseller_form"}}<h2>New reseller</h2>{{end}}`
 
 const sitesHTML = `{{define "sites"}}
   <h2 style="margin:0 0 10px 0;">Sites</h2>
@@ -1428,4 +1855,3 @@ const certCheckHTML = `{{define "cert_check"}}
 
   <p style="margin-top:14px;"><a href="/ui/certs">Back to Certificates</a></p>
 {{end}}`
-
