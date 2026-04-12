@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,6 +15,7 @@ import (
 	"mynginx/internal/config"
 	"mynginx/internal/nginx"
 	"mynginx/internal/store"
+	_ "mynginx/internal/store/mysql"
 	storesqlite "mynginx/internal/store/sqlite"
 	"mynginx/internal/util"
 
@@ -42,7 +43,7 @@ func main() {
 	paths := cfg.ResolvePaths()
 
 	// Open store early (for CLI commands)
-	st, err := storesqlite.Open(cfg.Storage.SQLitePath)
+	st, err := store.Open(cfg.Storage.Driver, cfg.Storage.DSN)
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
@@ -102,7 +103,6 @@ func main() {
 	}
 }
 
-
 func cmdServe(st store.SiteStore, cfg *config.Config, paths config.Paths) error {
 	srv, err := web.New(cfg, paths, st)
 	if err != nil {
@@ -147,9 +147,6 @@ func cmdPanelUser(st store.SiteStore, args []string) error {
 		return fmt.Errorf("unknown panel-user subcommand: %s", args[0])
 	}
 }
-
-
-
 
 func runStatus(cfg *config.Config, paths config.Paths) {
 	fmt.Println("NGM config loaded OK")
@@ -217,7 +214,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			clientMax = fs.String("client-max-body-size", "", "Nginx client_max_body_size (e.g. 32M, 128M)")
 			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
 			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
-
 		)
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -227,15 +223,15 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		}
 
 		res, err := core.SiteAdd(context.Background(), app.SiteAddRequest{
-			User:      *user,
-			Domain:    *domain,
-			Mode:      *mode,
-			PHP:       *phpv,
-			Webroot:   *webroot,
-			HTTP3:     *http3,
-			Provision: *provision,
-			SkipCert:  *skipCert,
-			ApplyNow:  *applyNow,
+			User:              *user,
+			Domain:            *domain,
+			Mode:              *mode,
+			PHP:               *phpv,
+			Webroot:           *webroot,
+			HTTP3:             *http3,
+			Provision:         *provision,
+			SkipCert:          *skipCert,
+			ApplyNow:          *applyNow,
 			ClientMaxBodySize: *clientMax,
 			PHPTimeRead:       *phpRead,
 			PHPTimeSend:       *phpSend,
@@ -256,16 +252,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			fmt.Println("WARNING:", w)
 		}
 		return nil
-
-
-
-
-
-
-
-
-
-
 
 	case "list":
 		items, err := core.SiteList(context.Background())
@@ -291,9 +277,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		}
 		return nil
 
-
-
-
 	case "rm":
 		fs := flag.NewFlagSet("site rm", flag.ContinueOnError)
 		var domain = fs.String("domain", "", "Domain to remove (soft delete)")
@@ -303,30 +286,34 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		if *domain == "" {
 			return fmt.Errorf("required: --domain")
 		}
-		if err := core.SiteDisable(context.Background(), *domain); err != nil { return err }
-                d := strings.ToLower(strings.TrimSpace(*domain))
-                fmt.Println("OK: site disabled (pending delete):", d)
+		if err := core.SiteDisable(context.Background(), *domain); err != nil {
+			return err
+		}
+		d := strings.ToLower(strings.TrimSpace(*domain))
+		fmt.Println("OK: site disabled (pending delete):", d)
 		return nil
-
-
 
 	case "edit":
 		fs := flag.NewFlagSet("site edit", flag.ContinueOnError)
 		var (
-			domain  = fs.String("domain", "", "Domain (required)")
-			user    = fs.String("user", "", "Owner username (optional)")
-			mode    = fs.String("mode", "", "Mode: php|proxy|static (optional)")
-			phpv    = fs.String("php", "", "PHP version (optional)")
-			webroot = fs.String("webroot", "", "Webroot (optional)")
-			http3S  = fs.String("http3", "", "Enable HTTP/3: true|false (optional)")
-			enS     = fs.String("enabled", "", "Enabled: true|false (optional)")
-			applyNow = fs.Bool("apply-now", false, "Apply immediately after edit")
+			domain    = fs.String("domain", "", "Domain (required)")
+			user      = fs.String("user", "", "Owner username (optional)")
+			mode      = fs.String("mode", "", "Mode: php|proxy|static (optional)")
+			phpv      = fs.String("php", "", "PHP version (optional)")
+			webroot   = fs.String("webroot", "", "Webroot (optional)")
+			http3S    = fs.String("http3", "", "Enable HTTP/3: true|false (optional)")
+			enS       = fs.String("enabled", "", "Enabled: true|false (optional)")
+			applyNow  = fs.Bool("apply-now", false, "Apply immediately after edit")
 			clientMax = fs.String("client-max-body-size", "", "Nginx client_max_body_size (e.g. 32M, 128M)")
 			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
 			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
 		)
-		if err := fs.Parse(args[1:]); err != nil { return err }
-		if strings.TrimSpace(*domain) == "" { return fmt.Errorf("required: --domain") }
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*domain) == "" {
+			return fmt.Errorf("required: --domain")
+		}
 
 		var http3 *bool
 		if strings.TrimSpace(*http3S) != "" {
@@ -340,19 +327,21 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		}
 
 		updated, err := core.SiteEdit(context.Background(), app.SiteEditRequest{
-			Domain: *domain,
-			User: *user,
-			Mode: *mode,
-			PHP: *phpv,
-			Webroot: *webroot,
-			HTTP3: http3,
-			Enabled: enabled,
-			ApplyNow: *applyNow,
+			Domain:            *domain,
+			User:              *user,
+			Mode:              *mode,
+			PHP:               *phpv,
+			Webroot:           *webroot,
+			HTTP3:             http3,
+			Enabled:           enabled,
+			ApplyNow:          *applyNow,
 			ClientMaxBodySize: *clientMax,
 			PHPTimeRead:       *phpRead,
 			PHPTimeSend:       *phpSend,
 		})
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fmt.Println("OK: site updated")
 		fmt.Printf("  domain : %s\n", updated.Domain)
 		fmt.Printf("  user_id: %d\n", updated.UserID)
@@ -363,10 +352,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		fmt.Printf("  enabled: %v\n", updated.Enabled)
 
 		return nil
-
-
-
-
 
 	default:
 		return fmt.Errorf("unknown site subcommand: %s", args[0])
@@ -379,7 +364,9 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 	}
 
 	core, err := app.New(cfg, paths, st)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	switch args[0] {
 	case "list":
@@ -424,7 +411,7 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			return err
 		}
 
-                if info == nil || !info.Exists {
+		if info == nil || !info.Exists {
 			fmt.Printf("Certificate does not exist for: %s\n", *domain)
 			return nil
 		}
@@ -461,7 +448,9 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		defer cancel()
 
 		fmt.Printf("Issuing certificate for %s...\n", *domain)
-		if err := core.CertIssue(ctx, *domain, *applyNow); err != nil { return err }
+		if err := core.CertIssue(ctx, *domain, *applyNow); err != nil {
+			return err
+		}
 		fmt.Println("Certificate issued successfully!")
 
 		return nil
@@ -478,7 +467,9 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		if err := core.CertRenew(ctx, strings.TrimSpace(*domain), *all, *applyNow); err != nil { return err }
+		if err := core.CertRenew(ctx, strings.TrimSpace(*domain), *all, *applyNow); err != nil {
+			return err
+		}
 		fmt.Println("Renewal complete!")
 		return nil
 
@@ -611,8 +602,6 @@ func cmdApply(st store.SiteStore, cfg *config.Config, paths config.Paths, args [
 		return err
 	}
 
-
-
 	core, err := app.New(cfg, paths, st)
 	if err != nil {
 		return err
@@ -657,14 +646,6 @@ func cmdApply(st store.SiteStore, cfg *config.Config, paths config.Paths, args [
 
 	fmt.Printf("Applied OK (%d): %s\n", len(res.Changed), strings.Join(res.Changed, ", "))
 	return nil
-
-
-
-
-
-
-
-
 
 }
 

@@ -3,10 +3,10 @@ package config
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"net"
-	"strings"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,10 +28,10 @@ type APIConfig struct {
 }
 
 type NginxConfig struct {
-	Root     string          `yaml:"root"`
-	MainConf string          `yaml:"main_conf"`
-	SitesDir string          `yaml:"sites_dir"`
-	Bin      string          `yaml:"bin"`
+	Root     string           `yaml:"root"`
+	MainConf string           `yaml:"main_conf"`
+	SitesDir string           `yaml:"sites_dir"`
+	Bin      string           `yaml:"bin"`
 	Apply    NginxApplyConfig `yaml:"apply"`
 }
 
@@ -51,7 +51,7 @@ type CertsConfig struct {
 }
 
 type PHPFPMConfig struct {
-	DefaultVersion string                    `yaml:"default_version"`
+	DefaultVersion string                   `yaml:"default_version"`
 	Versions       map[string]PHPFPMVersion `yaml:"versions"`
 }
 
@@ -72,6 +72,8 @@ type SecurityConfig struct {
 }
 
 type StorageConfig struct {
+	Driver     string `yaml:"driver"`
+	DSN        string `yaml:"dsn"`
 	SQLitePath string `yaml:"sqlite_path"`
 }
 
@@ -153,8 +155,18 @@ func (c *Config) applyDefaults() {
 	}
 
 	// Storage
+	if c.Storage.Driver == "" {
+		c.Storage.Driver = "sqlite"
+	}
 	if c.Storage.SQLitePath == "" {
 		c.Storage.SQLitePath = "/var/lib/ngm/ngm.db"
+	}
+	if c.Storage.DSN == "" {
+		if c.Storage.SQLitePath != "" {
+			c.Storage.DSN = c.Storage.SQLitePath
+		} else {
+			c.Storage.DSN = "/var/lib/ngm/ngm.db"
+		}
 	}
 	// Security
 	if c.Security.AuditLog == "" {
@@ -162,121 +174,114 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-
-
-
-
-
-
-//validate
+// validate
 func (c *Config) Validate() error {
-        var errs []string
+	var errs []string
 
-        // Nginx basics
-        if strings.TrimSpace(c.Nginx.Root) == "" {
-                errs = append(errs, "nginx.root is required (e.g. /opt/nginx)")
-        }
+	// Nginx basics
+	if strings.TrimSpace(c.Nginx.Root) == "" {
+		errs = append(errs, "nginx.root is required (e.g. /opt/nginx)")
+	}
 
-        // API auth basics
-        if len(c.API.Tokens) == 0 {
-                errs = append(errs, "api.tokens must contain at least one token")
-        }
-        for i, t := range c.API.Tokens {
-                if strings.TrimSpace(t) == "" {
-                        errs = append(errs, fmt.Sprintf("api.tokens[%d] is empty", i))
-                }
-        }
+	// API auth basics
+	if len(c.API.Tokens) == 0 {
+		errs = append(errs, "api.tokens must contain at least one token")
+	}
+	for i, t := range c.API.Tokens {
+		if strings.TrimSpace(t) == "" {
+			errs = append(errs, fmt.Sprintf("api.tokens[%d] is empty", i))
+		}
+	}
 
-        // Allowlist CIDRs (optional but recommended)
-        for i, cidr := range c.API.AllowIPs {
-                if strings.TrimSpace(cidr) == "" {
-                        errs = append(errs, fmt.Sprintf("api.allow_ips[%d] is empty", i))
-                        continue
-                }
-                if _, _, err := net.ParseCIDR(cidr); err != nil {
-                        errs = append(errs, fmt.Sprintf("api.allow_ips[%d]=%q invalid CIDR: %v", i, cidr, err))
-                }
-        }
+	// Allowlist CIDRs (optional but recommended)
+	for i, cidr := range c.API.AllowIPs {
+		if strings.TrimSpace(cidr) == "" {
+			errs = append(errs, fmt.Sprintf("api.allow_ips[%d] is empty", i))
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			errs = append(errs, fmt.Sprintf("api.allow_ips[%d]=%q invalid CIDR: %v", i, cidr, err))
+		}
+	}
 
-        // Certs
-        if c.Certs.Mode != "" && c.Certs.Mode != "certbot" {
-                errs = append(errs, fmt.Sprintf("certs.mode=%q unsupported (MVP supports only 'certbot')", c.Certs.Mode))
-        }
-        if strings.TrimSpace(c.Certs.Webroot) == "" {
-                errs = append(errs, "certs.webroot is required (e.g. /opt/nginx/html)")
-        }
-        if strings.TrimSpace(c.Certs.LetsEncryptLive) == "" {
-                errs = append(errs, "certs.letsencrypt_live is required (e.g. /etc/letsencrypt/live)")
-        }
+	// Certs
+	if c.Certs.Mode != "" && c.Certs.Mode != "certbot" {
+		errs = append(errs, fmt.Sprintf("certs.mode=%q unsupported (MVP supports only 'certbot')", c.Certs.Mode))
+	}
+	if strings.TrimSpace(c.Certs.Webroot) == "" {
+		errs = append(errs, "certs.webroot is required (e.g. /opt/nginx/html)")
+	}
+	if strings.TrimSpace(c.Certs.LetsEncryptLive) == "" {
+		errs = append(errs, "certs.letsencrypt_live is required (e.g. /etc/letsencrypt/live)")
+	}
 
-        // PHP versions map (optional, but if present must be consistent)
-        if c.PHPFPM.DefaultVersion != "" {
-                if _, ok := c.PHPFPM.Versions[c.PHPFPM.DefaultVersion]; !ok && len(c.PHPFPM.Versions) > 0 {
-                        errs = append(errs, fmt.Sprintf("phpfpm.default_version=%q not found in phpfpm.versions map", c.PHPFPM.DefaultVersion))
-                }
-        }
-        for ver, v := range c.PHPFPM.Versions {
-                if strings.TrimSpace(v.PoolsDir) == "" {
-                        errs = append(errs, fmt.Sprintf("phpfpm.versions[%q].pools_dir is required", ver))
-                }
-                if strings.TrimSpace(v.Service) == "" {
-                        errs = append(errs, fmt.Sprintf("phpfpm.versions[%q].service is required", ver))
-                }
-                if strings.TrimSpace(v.SockDir) == "" {
-                        errs = append(errs, fmt.Sprintf("phpfpm.versions[%q].sock_dir is required", ver))
-                }
-        }
+	// PHP versions map (optional, but if present must be consistent)
+	if c.PHPFPM.DefaultVersion != "" {
+		if _, ok := c.PHPFPM.Versions[c.PHPFPM.DefaultVersion]; !ok && len(c.PHPFPM.Versions) > 0 {
+			errs = append(errs, fmt.Sprintf("phpfpm.default_version=%q not found in phpfpm.versions map", c.PHPFPM.DefaultVersion))
+		}
+	}
+	for ver, v := range c.PHPFPM.Versions {
+		if strings.TrimSpace(v.PoolsDir) == "" {
+			errs = append(errs, fmt.Sprintf("phpfpm.versions[%q].pools_dir is required", ver))
+		}
+		if strings.TrimSpace(v.Service) == "" {
+			errs = append(errs, fmt.Sprintf("phpfpm.versions[%q].service is required", ver))
+		}
+		if strings.TrimSpace(v.SockDir) == "" {
+			errs = append(errs, fmt.Sprintf("phpfpm.versions[%q].sock_dir is required", ver))
+		}
+	}
 
-        if len(errs) > 0 {
-                return fmt.Errorf("config validation failed:\n- %s", strings.Join(errs, "\n- "))
-        }
-        return nil
+	if len(errs) > 0 {
+		return fmt.Errorf("config validation failed:\n- %s", strings.Join(errs, "\n- "))
+	}
+	return nil
 }
 
 //validate end
 
-//paths//
+// paths//
 type Paths struct {
-        // Nginx
-        NginxRoot     string
-        NginxBin      string
-        NginxMainConf string
-        NginxSitesDir string
-        NginxStageDir string
-        NginxBackupDir string
+	// Nginx
+	NginxRoot      string
+	NginxBin       string
+	NginxMainConf  string
+	NginxSitesDir  string
+	NginxStageDir  string
+	NginxBackupDir string
 
-        // Certs
-        CertbotBin      string
-        ACMEWebroot     string
-        LetsEncryptLive string
+	// Certs
+	CertbotBin      string
+	ACMEWebroot     string
+	LetsEncryptLive string
 }
 
 func (c *Config) ResolvePaths() Paths {
-        root := c.Nginx.Root
+	root := c.Nginx.Root
 
-        return Paths{
-                NginxRoot:      root,
-                NginxBin:       absOrJoin(root, c.Nginx.Bin),
-                NginxMainConf:  absOrJoin(root, c.Nginx.MainConf),
-                NginxSitesDir:  absOrJoin(root, c.Nginx.SitesDir),
-                NginxStageDir:  absOrJoin(root, c.Nginx.Apply.StagingDir),
-                NginxBackupDir: absOrJoin(root, c.Nginx.Apply.BackupDir),
+	return Paths{
+		NginxRoot:      root,
+		NginxBin:       absOrJoin(root, c.Nginx.Bin),
+		NginxMainConf:  absOrJoin(root, c.Nginx.MainConf),
+		NginxSitesDir:  absOrJoin(root, c.Nginx.SitesDir),
+		NginxStageDir:  absOrJoin(root, c.Nginx.Apply.StagingDir),
+		NginxBackupDir: absOrJoin(root, c.Nginx.Apply.BackupDir),
 
-                CertbotBin:      c.Certs.CertbotBin, // can be PATH lookup
-                ACMEWebroot:     c.Certs.Webroot,
-                LetsEncryptLive: c.Certs.LetsEncryptLive,
-        }
+		CertbotBin:      c.Certs.CertbotBin, // can be PATH lookup
+		ACMEWebroot:     c.Certs.Webroot,
+		LetsEncryptLive: c.Certs.LetsEncryptLive,
+	}
 }
 
 func absOrJoin(root, p string) string {
-        if p == "" {
-                return ""
-        }
-        if filepath.IsAbs(p) {
-                return p
-        }
-        return filepath.Join(root, p)
+	if p == "" {
+		return ""
+	}
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(root, p)
 }
 
 //paths end//
-
