@@ -1,19 +1,28 @@
-# build
-/dist/
-/*.exe
-*.out
+# Binaries
 /bin/
-./bin/
+*.out
+*.exe
 
-# local runtime/state
+# Build artifacts & staging
+/build/
+/dist/
+
+# RPM/tar output (keep SPECS/ tracked)
+/packaging/rpm/BUILD/
+/packaging/rpm/BUILDROOT/
+/packaging/rpm/RPMS/
+/packaging/rpm/SRPMS/
+/packaging/rpm/SOURCES/
+
+# Runtime / state
 *.db
 *.db-shm
 *.db-wal
 
-# logs
+# Logs
 *.log
 
-# editor
+# Editor
 .vscode/
 .idea/
 .DS_Store
