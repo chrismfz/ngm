@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+# ensure config dir
+[ -d /etc/ngm ] || mkdir -p /etc/ngm
+
+# systemd reload/enable/start
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+    systemctl enable ngm.service || true
+    systemctl restart ngm.service || true
+fi
+
+exit 0

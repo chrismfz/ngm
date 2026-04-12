@@ -93,7 +93,7 @@ stage-pkgroot: build
 	@mkdir -p $(PKGROOT)/usr/bin
 	@cp -f $(BINARY) $(PKGROOT)/usr/bin/ngm
 	@mkdir -p $(PKGROOT)/etc/ngm
-	@[ -f $(PKGROOT)/etc/ngm/ngm.conf ] || cp -f $(CONFIG_DIR)/ngm.conf $(PKGROOT)/etc/ngm/
+	@[ -f $(PKGROOT)/etc/ngm/config.yaml ] || cp -f $(CONFIG_DIR)/config.yaml $(PKGROOT)/etc/ngm/
 	@mkdir -p $(PKGROOT)/usr/share/ngm/configs
 	@rsync -a --delete "$(CONFIG_DIR)/" "$(PKGROOT)/usr/share/ngm/configs/"
 	@mkdir -p $(PKGROOT)/usr/lib/systemd/system

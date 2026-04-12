@@ -1,6 +1,6 @@
 Name:           ngm
 Version:        2026.04.12
-Release:        1.152106%{?dist}
+Release:        1.152511%{?dist}
 Summary:        NGM – Nginx Go Manager
 License:        MIT
 URL:            https://infected.gr
