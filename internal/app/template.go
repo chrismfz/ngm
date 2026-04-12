@@ -2,15 +2,15 @@ package app
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-        "regexp"
-        "strconv"
 	"mynginx/internal/fpm"
 	"mynginx/internal/nginx"
 	"mynginx/internal/store"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 )
 
 func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTargetLister) (nginx.SiteTemplateData, error) {
@@ -56,7 +56,11 @@ func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTa
 			PHPAdminValues:          map[string]string{},
 			PHPValues:               map[string]string{},
 		}
-
+		if owner, err := a.st.GetPanelUserByUsername(runUser); err == nil {
+			if limits, err := a.st.GetEffectiveLimits(owner.ID, owner.Role); err == nil && limits.MaxPHPWorkers != -1 {
+				poolTD.MaxChildren = limits.MaxPHPWorkers
+			}
+		}
 
 		// Load per-site php.ini overrides from sidecar file (no sqlite)
 		ovPath := filepath.Join(siteRoot, "php", "php.ini")
@@ -69,8 +73,6 @@ func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTa
 				poolTD.PHPValues[k] = v
 			}
 		}
-
-
 
 		if _, _, err := fpm.EnsurePool(ver.PoolsDir, ver.Service, ver.SockDir, domain, s.PHPVersion, poolTD); err != nil {
 			return nginx.SiteTemplateData{}, fmt.Errorf("ensure fpm pool: %w", err)
@@ -109,9 +111,8 @@ func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTa
 		ErrorLog:        filepath.Join(logsDir, "error.log"),
 	}
 
-
-// Defaults so template never renders empty directives.
-// (Empty in DB means "use defaults".)
+	// Defaults so template never renders empty directives.
+	// (Empty in DB means "use defaults".)
 	clientMax := strings.TrimSpace(s.ClientMaxBodySize)
 	if clientMax == "" {
 		clientMax = "32M"
@@ -127,11 +128,9 @@ func (a *App) buildTemplateData(s store.Site, domain string, proxyLister proxyTa
 		phpSend = "60s"
 	}
 
-
-
 	if s.Mode == "" || s.Mode == "php" {
 		td.PHP = nginx.FastCGICfg{
-			Pass: phpPass,
+			Pass:     phpPass,
 			TimeRead: phpRead,
 			TimeSend: phpSend,
 			Cache: nginx.CacheCfg{
@@ -234,82 +233,86 @@ func inferUserFromWebroot(homeRoot, webroot string) (string, bool) {
 var reIniKey = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // parsePHPIniOverrides parses textarea lines:
-//   key = value
+//
+//	key = value
+//
 // Supports optional prefixes:
-//   admin:key = value   -> php_admin_value[key]
-//   value:key = value   -> php_value[key]
+//
+//	admin:key = value   -> php_admin_value[key]
+//	value:key = value   -> php_value[key]
+//
 // Also ignores empty lines and comment lines starting with # or ;.
 func parsePHPIniOverrides(raw string) (admin map[string]string, normal map[string]string, warnings []string) {
-        admin = map[string]string{}
-        normal = map[string]string{}
+	admin = map[string]string{}
+	normal = map[string]string{}
 
-        raw = strings.ReplaceAll(raw, "\r\n", "\n")
-        raw = strings.ReplaceAll(raw, "\r", "\n")
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
 
-        for _, line := range strings.Split(raw, "\n") {
-            l := strings.TrimSpace(line)
-            if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
-                continue
-            }
-            // split on first '='
-            i := strings.Index(l, "=")
-            if i < 0 {
-                warnings = append(warnings, "ignored (no '='): "+l)
-                continue
-            }
-            key := strings.TrimSpace(l[:i])
-            val := strings.TrimSpace(l[i+1:])
-            if key == "" {
-                warnings = append(warnings, "ignored (empty key): "+l)
-                continue
-            }
-            if val == "" {
-                // allow empty values but it's usually a mistake
-                warnings = append(warnings, "warning (empty value): "+key)
-            }
+	for _, line := range strings.Split(raw, "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
+			continue
+		}
+		// split on first '='
+		i := strings.Index(l, "=")
+		if i < 0 {
+			warnings = append(warnings, "ignored (no '='): "+l)
+			continue
+		}
+		key := strings.TrimSpace(l[:i])
+		val := strings.TrimSpace(l[i+1:])
+		if key == "" {
+			warnings = append(warnings, "ignored (empty key): "+l)
+			continue
+		}
+		if val == "" {
+			// allow empty values but it's usually a mistake
+			warnings = append(warnings, "warning (empty value): "+key)
+		}
 
-            // prefix routing: admin:foo or value:foo
-            dst := "admin"
-            if p := strings.IndexByte(key, ':'); p > 0 {
-                pref := strings.ToLower(strings.TrimSpace(key[:p]))
-                rest := strings.TrimSpace(key[p+1:])
-                if pref == "admin" || pref == "php_admin_value" {
-                        dst = "admin"
-                        key = rest
-                } else if pref == "value" || pref == "php_value" {
-                        dst = "value"
-                        key = rest
-                }
-            }
+		// prefix routing: admin:foo or value:foo
+		dst := "admin"
+		if p := strings.IndexByte(key, ':'); p > 0 {
+			pref := strings.ToLower(strings.TrimSpace(key[:p]))
+			rest := strings.TrimSpace(key[p+1:])
+			if pref == "admin" || pref == "php_admin_value" {
+				dst = "admin"
+				key = rest
+			} else if pref == "value" || pref == "php_value" {
+				dst = "value"
+				key = rest
+			}
+		}
 
-            key = strings.TrimSpace(key)
-            if !reIniKey.MatchString(key) {
-                warnings = append(warnings, "ignored (bad key): "+key)
-                continue
-            }
+		key = strings.TrimSpace(key)
+		if !reIniKey.MatchString(key) {
+			warnings = append(warnings, "ignored (bad key): "+key)
+			continue
+		}
 
-            if dst == "value" {
-                normal[key] = val
-            } else {
-                admin[key] = val
-            }
-        }
-        return admin, normal, warnings
+		if dst == "value" {
+			normal[key] = val
+		} else {
+			admin[key] = val
+		}
+	}
+	return admin, normal, warnings
 }
 
 // parsePHPSeconds tries to parse common php.ini time values for max_execution_time-like settings.
 // Accepts: "600", "600s" (we treat suffix-less as seconds).
 func parsePHPSeconds(v string) (int, bool) {
-        v = strings.TrimSpace(strings.ToLower(v))
-        if v == "" {
-                return 0, false
-        }
-        if strings.HasSuffix(v, "s") {
-                v = strings.TrimSuffix(v, "s")
-        }
-        n, err := strconv.Atoi(strings.TrimSpace(v))
-        if err != nil || n < 0 {
-                return 0, false
-        }
-        return n, true
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return 0, false
+	}
+	if strings.HasSuffix(v, "s") {
+		v = strings.TrimSuffix(v, "s")
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }

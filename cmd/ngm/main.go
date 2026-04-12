@@ -93,8 +93,8 @@ func main() {
 		fmt.Printf("Unknown command: %s\n", args[0])
 		fmt.Println("Commands:")
 		fmt.Println("  serve                                (start local UI on cfg.api.listen)")
-		fmt.Println("  site add --user <u> --domain <d> [--mode php|proxy|static] [--php 8.3] [--webroot <path>] [--http3=true|false] [--skip-cert] [--apply-now=true|false]")
-		fmt.Println("  site edit --domain <d> [--user <u>] [--mode php|proxy|static] [--php 8.3] [--webroot <path>] [--http3=true|false] [--enabled=true|false] [--apply-now=true|false]")
+		fmt.Println("  site add --user <u> --domain <d> [--parent <root-domain>] [--mode php|proxy|static] [--php 8.3] [--webroot <path>] [--http3=true|false] [--skip-cert] [--apply-now=true|false]")
+		fmt.Println("  site edit --domain <d> [--user <u>] [--parent <root-domain>] [--mode php|proxy|static] [--php 8.3] [--webroot <path>] [--http3=true|false] [--enabled=true|false] [--apply-now=true|false]")
 		fmt.Println("  site list")
 		fmt.Println("  site rm --domain <d>")
 		fmt.Println("  apply [--domain <d>] [--all] [--dry-run] [--limit N]")
@@ -384,6 +384,7 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		var (
 			user      = fs.String("user", "", "Owner username")
 			domain    = fs.String("domain", "", "Domain (e.g. example.com)")
+			parent    = fs.String("parent", "", "Parent/root domain for subdomain sites")
 			mode      = fs.String("mode", "php", "Mode: php|proxy|static")
 			phpv      = fs.String("php", cfg.PHPFPM.DefaultVersion, "PHP version (e.g. 8.3)")
 			webroot   = fs.String("webroot", "", "Webroot path (optional; default derived from user+domain)")
@@ -405,6 +406,7 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		res, err := core.SiteAdd(context.Background(), app.SiteAddRequest{
 			User:              *user,
 			Domain:            *domain,
+			ParentDomain:      *parent,
 			Mode:              *mode,
 			PHP:               *phpv,
 			Webroot:           *webroot,
@@ -443,8 +445,8 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			return nil
 		}
 
-		fmt.Printf("%-25s  %-6s  %-5s  %-9s  %-10s  %-20s  %-40s  %s\n",
-			"DOMAIN", "MODE", "HTTP3", "ENABLED", "STATE", "LAST_APPLIED", "WEBROOT", "PHP")
+		fmt.Printf("%-25s  %-25s  %-6s  %-5s  %-9s  %-10s  %-20s  %-40s  %s\n",
+			"DOMAIN", "PARENT", "MODE", "HTTP3", "ENABLED", "STATE", "LAST_APPLIED", "WEBROOT", "PHP")
 
 		for _, it := range items {
 			s := it.Site
@@ -452,8 +454,12 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			if !s.Enabled {
 				enabledStr = "no"
 			}
-			fmt.Printf("%-25s  %-6s  %-5v  %-9s  %-10s  %-20s  %-40s  %s\n",
-				s.Domain, s.Mode, s.EnableHTTP3, enabledStr, it.State, it.Last, trimLen(s.Webroot, 40), s.PHPVersion)
+			parent := "-"
+			if s.ParentDomain != nil && strings.TrimSpace(*s.ParentDomain) != "" {
+				parent = *s.ParentDomain
+			}
+			fmt.Printf("%-25s  %-25s  %-6s  %-5v  %-9s  %-10s  %-20s  %-40s  %s\n",
+				s.Domain, parent, s.Mode, s.EnableHTTP3, enabledStr, it.State, it.Last, trimLen(s.Webroot, 40), s.PHPVersion)
 		}
 		return nil
 
@@ -478,6 +484,7 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		var (
 			domain    = fs.String("domain", "", "Domain (required)")
 			user      = fs.String("user", "", "Owner username (optional)")
+			parent    = fs.String("parent", "", "Parent/root domain (optional, empty clears to root)")
 			mode      = fs.String("mode", "", "Mode: php|proxy|static (optional)")
 			phpv      = fs.String("php", "", "PHP version (optional)")
 			webroot   = fs.String("webroot", "", "Webroot (optional)")
@@ -501,14 +508,22 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			http3 = &v
 		}
 		var enabled *bool
+		parentSet := false
 		if strings.TrimSpace(*enS) != "" {
 			v := strings.EqualFold(strings.TrimSpace(*enS), "true") || strings.TrimSpace(*enS) == "1"
 			enabled = &v
 		}
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "parent" {
+				parentSet = true
+			}
+		})
 
 		updated, err := core.SiteEdit(context.Background(), app.SiteEditRequest{
 			Domain:            *domain,
 			User:              *user,
+			ParentDomain:      *parent,
+			ParentDomainSet:   parentSet,
 			Mode:              *mode,
 			PHP:               *phpv,
 			Webroot:           *webroot,
