@@ -10,50 +10,39 @@ RPM_TS       := $(shell echo "$(BUILD_TIME)" | sed 's/.*T//; s/://g')
 RPM_RELEASE  := 1.$(RPM_TS)
 RPM_ARCH     := $(shell rpm --eval '%{_arch}')
 
-
-BIN_DIR := bin
-MAIN_DIR := cmd/ngm/
-BINARY := $(BIN_DIR)/ngm
+BIN_DIR      := bin
+MAIN_DIR     := cmd/ngm/
+BINARY       := $(BIN_DIR)/ngm
 PKGROOT      ?= build/pkgroot
 RPMTOP       ?= packaging/rpm
 SPECFILE     ?= $(RPMTOP)/SPECS/ngm.spec
-ARCH         ?= x86_64
+CONFIG_DIR   := configs
 
-
-override ARCH    := amd64
-override VERSION := $(shell date +%Y.%m.%d-%H%M%S)
-override PKGROOT := build/pkgroot
-override OUTDIR  := build/deb
-BIN := bin/ngm
-CONFIG_DIR := configs
-DEB_SRC := packaging/debian/DEBIAN
-
-
-# --- Remote Sync ---
+# -------------------------------
+# Remote Sync
+# -------------------------------
 REMOTE_USER ?= chris
 REMOTE_HOST ?= repo.nixpal.com
 REMOTE_PORT ?= 65535
 REMOTE_DIR  ?= ~/packages/
-SYNC_ON_RELEASE ?= 1
 
 RSYNC_FLAGS ?= -av --partial --inplace
 SSH_CMD     ?= ssh -p $(REMOTE_PORT)
 
-
 # -------------------------------
-# Go build target config (CPU/OS)
+# Go build config
 # -------------------------------
-GOOS    ?= linux
-GOARCH  ?= amd64
-GOAMD64 ?= v1
-GOAMD64 := $(strip $(GOAMD64))
+GOOS        ?= linux
+GOARCH      ?= amd64
+GOAMD64     ?= v1
+GOAMD64     := $(strip $(GOAMD64))
 CGO_ENABLED ?= 0
-# v1=vintage, v2, v3, v4
 
 # -------------------------------
 # Phony targets
 # -------------------------------
-.PHONY: help setup update build run clean git clean-deb clean-rpm distclean
+.PHONY: help setup update build run clean clean-rpm distclean \
+        stage-pkgroot stage-rpm rpm_prep_dirs rpm_spec_version rpm tar sync git
 
 # -------------------------------
 # Help
@@ -66,7 +55,7 @@ help: ## Show this help message
 	@echo ""
 
 # -------------------------------
-# Setup
+# Setup / Update
 # -------------------------------
 setup: ## First-time setup after git clone
 	go mod tidy
@@ -89,7 +78,7 @@ build: ## Build the binary into ./bin/
 	GOOS=$(GOOS) GOARCH=$(GOARCH) GOAMD64=$(GOAMD64) CGO_ENABLED=$(CGO_ENABLED) \
 	go build -a \
 		-tags netgo,osusergo \
-		-ldflags "-X 'main.Version=$(shell date +%Y.%m.%d)' -X 'main.BuildTime=$(shell date +%Y-%m-%dT%H:%M:%S)'" \
+		-ldflags "-X 'main.Version=$(VERSION)' -X 'main.BuildTime=$(BUILD_TIME)'" \
 		-o $(BINARY) ./$(MAIN_DIR)
 	@echo "✅ Built: $(BINARY)"
 
@@ -97,98 +86,27 @@ run: build ## Run the application
 	@./$(BINARY)
 
 # -------------------------------
-# Clean
+# Stage (shared by rpm + tar)
 # -------------------------------
-# Καθαρίζει το binary και ό,τι προσωρινό υπάρχει στο pkgroot
-clean:
-	@rm -f bin/*
-	@rm -rf build/pkgroot/DEBIAN
-	@rm -rf build/pkgroot/etc
-	@rm -rf build/pkgroot/usr
-	@rm -rf build/pkgroot/lib
-	@rm -f  build/pkgroot/LICENSE
-	@echo "🧹 Cleaned: bin, build/pkgroot"
-
-# Καθαρίζει DEB artifacts (deb πακέτα + staging)
-clean-deb:
-	@rm -rf build/deb
-	@rm -f  build/*.deb build/deb/*.deb build/deb/*/*.deb
-	@# προαιρετικά: καθάρισε και ό,τι deb έμεινε κάπου αλλού
-	@find build -maxdepth 2 -type f -name '*.deb' -delete 2>/dev/null || true
-	@echo "🧹 Cleaned: deb artifacts"
-
-# Καθαρίζει RPM artifacts αλλά ΔΕΝ αγγίζει SPECS/
-clean-rpm:
-	@rm -rf packaging/rpm/BUILD packaging/rpm/BUILDROOT
-	@rm -rf packaging/rpm/RPMS packaging/rpm/SRPMS packaging/rpm/SOURCES
-	@# αν έχεις αλλάξει το ARCH folder name, σβήσ’ τα όλα:
-	@find packaging/rpm -type f -name '*.rpm' -delete 2>/dev/null || true
-	@echo "🧹 Cleaned: rpm artifacts (kept SPECS/)"
-
-# Πλήρες cleanup (ό,τι κάνει το clean + deb + rpm)
-distclean: clean clean-deb clean-rpm
-	@echo "🧨 Distclean done"
-
-
-
-# -------------------------------
-# Git helper
-# -------------------------------
-git: ## Commit + push με προσαρμοσμένο μήνυμα
-	@read -p "Enter commit message: " MSG && \
-	git add . && \
-	git commit -m "$$MSG" && \
-	git push
-
-
-deb: build
-	@echo "PKGROOT=[$(PKGROOT)] OUTDIR=[$(OUTDIR)]"
-	@test -n "$(PKGROOT)" && test -n "$(OUTDIR)"
-	@rm -rf "$(PKGROOT)" && mkdir -p "$(PKGROOT)/DEBIAN" \
-		"$(PKGROOT)/usr/bin" \
-		"$(PKGROOT)/lib/systemd/system" \
-		"$(PKGROOT)/usr/share/ngm/configs" \
-		"$(PKGROOT)/etc/ngm" \
-		"$(OUTDIR)"
-
-	# copy DEBIAN metadata/scripts
-	@cp -a "$(DEB_SRC)/." "$(PKGROOT)/DEBIAN/"
-	@sed -i "s/^Version:.*/Version: $(VERSION)-1/" "$(PKGROOT)/DEBIAN/control"
-
-	# payload
-	@install -m0755 "$(BIN)" "$(PKGROOT)/usr/bin/ngm"
-	@install -m0640 "$(CONFIG_DIR)/ngm.service"   "$(PKGROOT)/lib/systemd/system/ngm.service"
-	@install -m0640 "$(CONFIG_DIR)/ngm.conf"      "$(PKGROOT)/etc/ngm/ngm.conf"
-
-	@rsync -a --delete "$(CONFIG_DIR)/" "$(PKGROOT)/usr/share/ngm/configs/"
-	# executables
-	@chmod 0755 "$(PKGROOT)/DEBIAN/postinst" "$(PKGROOT)/DEBIAN/prerm" "$(PKGROOT)/DEBIAN/postrm" 2>/dev/null || true
-
-	# build artifact -> build/deb/
-	@fakeroot dpkg-deb --build "$(PKGROOT)" "$(OUTDIR)/ngm_$(VERSION)-1_$(ARCH).deb"
-	@echo "📦 Built: $(OUTDIR)/ngm_$(VERSION)-1_$(ARCH).deb"
-
-
-
-
-
 stage-pkgroot: build
 	@echo "→ Staging into $(PKGROOT)"
-	# binary
 	@mkdir -p $(PKGROOT)/usr/bin
 	@cp -f $(BINARY) $(PKGROOT)/usr/bin/ngm
-	# configs
 	@mkdir -p $(PKGROOT)/etc/ngm
-	@[ -f $(PKGROOT)/etc/ngm/ngm.conf ]       || cp -f $(CONFIG_DIR)/ngm.conf       $(PKGROOT)/etc/ngm/
-	# === ship ALL example configs ===
+	@[ -f $(PKGROOT)/etc/ngm/ngm.conf ] || cp -f $(CONFIG_DIR)/ngm.conf $(PKGROOT)/etc/ngm/
 	@mkdir -p $(PKGROOT)/usr/share/ngm/configs
 	@rsync -a --delete "$(CONFIG_DIR)/" "$(PKGROOT)/usr/share/ngm/configs/"
-
-	# systemd unit (RPM-friendly path)
 	@mkdir -p $(PKGROOT)/usr/lib/systemd/system
 	@cp -f $(CONFIG_DIR)/ngm.service $(PKGROOT)/usr/lib/systemd/system/ngm.service
 
+stage-rpm: stage-pkgroot
+	@echo "→ Staging RPM systemd unit"
+	@mkdir -p $(PKGROOT)/usr/lib/systemd/system
+	@cp -f $(CONFIG_DIR)/ngm.service $(PKGROOT)/usr/lib/systemd/system/ngm.service
 
+# -------------------------------
+# RPM
+# -------------------------------
 rpm_prep_dirs:
 	@mkdir -p $(RPMTOP)/{BUILD,BUILDROOT,RPMS,SRPMS,SPECS,SOURCES}
 
@@ -196,17 +114,7 @@ rpm_spec_version:
 	@sed -i 's/^Version:.*/Version:        $(RPM_VERSION)/' $(SPECFILE)
 	@sed -i 's/^Release:.*/Release:        $(RPM_RELEASE)%{?dist}/' $(SPECFILE)
 
-
-.PHONY: stage-rpm
-stage-rpm: stage-pkgroot
-	@echo "→ Staging RPM systemd unit"
-	@mkdir -p $(PKGROOT)/usr/lib/systemd/system
-	@cp -f $(CONFIG_DIR)/ngm.service $(PKGROOT)/usr/lib/systemd/system/ngm.service
-
-
-
-# --- RPM (.rpm) --- (μόνο η τελευταία γραμμή αλλάζει)
-rpm: rpm_prep_dirs rpm_spec_version stage-rpm ## Δημιουργεί .rpm
+rpm: rpm_prep_dirs rpm_spec_version stage-rpm ## Build .rpm package
 	@echo "→ Creating RPM package: ngm-$(RPM_VERSION)-$(RPM_RELEASE)"
 	@rpmbuild \
 	  --define "_topdir $(CURDIR)/$(RPMTOP)" \
@@ -217,29 +125,66 @@ rpm: rpm_prep_dirs rpm_spec_version stage-rpm ## Δημιουργεί .rpm
 	  --buildroot "$(CURDIR)/$(RPMTOP)/BUILDROOT" \
 	  --target $(RPM_ARCH) \
 	  -bb $(SPECFILE)
-	@echo "✅ RPMs under: $(RPMTOP)/RPMS/$(RPM_ARCH)"
+	@echo "✅ RPM under: $(RPMTOP)/RPMS/$(RPM_ARCH)"
 
+# -------------------------------
+# Tar
+# -------------------------------
+TAR_OUTDIR := build/tar
+TAR_NAME   := ngm-$(VERSION)-linux-$(GOARCH)
+TAR_FILE   := $(TAR_OUTDIR)/$(TAR_NAME).tar.gz
 
+tar: stage-pkgroot ## Build tar.gz archive (binary + configs + service)
+	@mkdir -p $(TAR_OUTDIR)
+	@tar -czf $(TAR_FILE) \
+	  --transform 's|^|$(TAR_NAME)/|' \
+	  -C $(PKGROOT) \
+	  usr etc
+	@echo "✅ Archive: $(TAR_FILE)"
 
-
-# --- Sync both DEB & RPM to remote repo ---
-.PHONY: sync
-sync:
+# -------------------------------
+# Sync (RPM + tar → remote repo)
+# -------------------------------
+sync: ## Sync latest .rpm and .tar.gz to remote repo
 	@set -euo pipefail; \
-	DEB_FILE="$$(ls -1t build/deb/ngm_*_amd64.deb | head -n1)"; \
-	RPM_FILE="$$(ls -1t packaging/rpm/RPMS/*/ngm-*.rpm | head -n1)"; \
-	[ -n "$$DEB_FILE" ] || { echo "❌ No .deb package found in build/deb"; exit 1; }; \
-	[ -n "$$RPM_FILE" ] || { echo "❌ No .rpm package found in packaging/rpm/RPMS"; exit 1; }; \
+	RPM_FILE="$$(ls -1t $(RPMTOP)/RPMS/*/ngm-*.rpm 2>/dev/null | head -n1)"; \
+	TAR_FILE="$$(ls -1t $(TAR_OUTDIR)/ngm-*.tar.gz 2>/dev/null | head -n1)"; \
+	[ -n "$$RPM_FILE" ] || { echo "❌ No .rpm found in $(RPMTOP)/RPMS — run: make rpm"; exit 1; }; \
+	[ -n "$$TAR_FILE" ] || { echo "❌ No .tar.gz found in $(TAR_OUTDIR) — run: make tar"; exit 1; }; \
 	echo "🌐 Syncing to $(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_DIR)"; \
-	$(SSH_CMD) $(REMOTE_USER)@$(REMOTE_HOST) "mkdir -p $(REMOTE_DIR)/deb $(REMOTE_DIR)/rpm"; \
-	echo "→ Upload: $$DEB_FILE -> $(REMOTE_DIR)/deb/"; \
-	rsync $(RSYNC_FLAGS) -e "$(SSH_CMD)" "$$DEB_FILE" "$(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_DIR)/deb/"; \
-	echo "→ Upload: $$RPM_FILE -> $(REMOTE_DIR)/rpm/"; \
+	$(SSH_CMD) $(REMOTE_USER)@$(REMOTE_HOST) "mkdir -p $(REMOTE_DIR)/rpm $(REMOTE_DIR)/tar"; \
+	echo "→ Upload: $$RPM_FILE → $(REMOTE_DIR)/rpm/"; \
 	rsync $(RSYNC_FLAGS) -e "$(SSH_CMD)" "$$RPM_FILE" "$(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_DIR)/rpm/"; \
-	echo "→ Upload: checksums.txt -> $(REMOTE_DIR)/"; \
+	echo "→ Upload: $$TAR_FILE → $(REMOTE_DIR)/tar/"; \
+	rsync $(RSYNC_FLAGS) -e "$(SSH_CMD)" "$$TAR_FILE" "$(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_DIR)/tar/"; \
 	if [ -f checksums.txt ]; then \
 	  rsync $(RSYNC_FLAGS) -e "$(SSH_CMD)" checksums.txt "$(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_DIR)/"; \
 	fi; \
 	echo "✅ Remote sync complete."
 
+# -------------------------------
+# Clean
+# -------------------------------
+clean: ## Remove binary and pkgroot staging
+	@rm -f bin/*
+	@rm -rf build/pkgroot
+	@echo "🧹 Cleaned: bin, build/pkgroot"
 
+clean-rpm: ## Remove RPM build artifacts (keeps SPECS/)
+	@rm -rf $(RPMTOP)/BUILD $(RPMTOP)/BUILDROOT
+	@rm -rf $(RPMTOP)/RPMS $(RPMTOP)/SRPMS $(RPMTOP)/SOURCES
+	@find $(RPMTOP) -type f -name '*.rpm' -delete 2>/dev/null || true
+	@rm -rf $(TAR_OUTDIR)
+	@echo "🧹 Cleaned: rpm artifacts + tar (kept SPECS/)"
+
+distclean: clean clean-rpm ## Full clean
+	@echo "🧨 Distclean done"
+
+# -------------------------------
+# Git helper
+# -------------------------------
+git: ## Commit + push with custom message
+	@read -p "Enter commit message: " MSG && \
+	git add . && \
+	git commit -m "$$MSG" && \
+	git push
