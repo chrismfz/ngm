@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,7 +15,9 @@ import (
 	"mynginx/internal/config"
 	"mynginx/internal/nginx"
 	"mynginx/internal/store"
+	_ "mynginx/internal/store/mysql"
 	storesqlite "mynginx/internal/store/sqlite"
+	"mynginx/internal/users"
 	"mynginx/internal/util"
 
 	"mynginx/internal/app"
@@ -42,7 +44,7 @@ func main() {
 	paths := cfg.ResolvePaths()
 
 	// Open store early (for CLI commands)
-	st, err := storesqlite.Open(cfg.Storage.SQLitePath)
+	st, err := store.Open(cfg.Storage.Driver, cfg.Storage.DSN)
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
@@ -82,6 +84,10 @@ func main() {
 		if err := cmdPanelUser(st, args[1:]); err != nil {
 			log.Fatalf("panel-user: %v", err)
 		}
+	case "package":
+		if err := cmdPackage(st, args[1:]); err != nil {
+			log.Fatalf("package: %v", err)
+		}
 
 	default:
 		fmt.Printf("Unknown command: %s\n", args[0])
@@ -97,11 +103,11 @@ func main() {
 		fmt.Println("  cert issue --domain <d>            (issue/renew certificate)")
 		fmt.Println("  cert renew [--domain <d>] [--all] (renew expiring certs)")
 		fmt.Println("  cert check [--days 30]             (check expiring soon)")
-		fmt.Println("  panel-user add --user <u> --pass <p> [--role admin] [--enabled=true|false]")
+		fmt.Println("  panel-user add|list|edit|del ...")
+		fmt.Println("  package add|list|show|edit|del ...")
 		os.Exit(2)
 	}
 }
-
 
 func cmdServe(st store.SiteStore, cfg *config.Config, paths config.Paths) error {
 	srv, err := web.New(cfg, paths, st)
@@ -117,7 +123,7 @@ func cmdServe(st store.SiteStore, cfg *config.Config, paths config.Paths) error 
 
 func cmdPanelUser(st store.SiteStore, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: panel-user add --user <u> --pass <p> [--role admin] [--enabled=true|false]")
+		return fmt.Errorf("usage: panel-user <add|list|edit|del> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -126,6 +132,8 @@ func cmdPanelUser(st store.SiteStore, args []string) error {
 		pass := fs.String("pass", "", "Password")
 		role := fs.String("role", "admin", "Role")
 		enabled := fs.Bool("enabled", true, "Enabled")
+		reseller := fs.Int64("reseller", 0, "Reseller panel user ID")
+		pkgID := fs.Int64("package", 0, "Package ID")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -133,23 +141,192 @@ func cmdPanelUser(st store.SiteStore, args []string) error {
 			return fmt.Errorf("required: --user and --pass")
 		}
 
-		hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
+		passwordHash := "$SHADOW$"
+		if *role != "user" {
+			hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
+			if err != nil {
+				return err
+			}
+			passwordHash = string(hash)
+		}
+		pu, err := st.CreatePanelUser(strings.TrimSpace(*user), passwordHash, strings.TrimSpace(*role), *enabled)
 		if err != nil {
 			return err
 		}
-		pu, err := st.CreatePanelUser(strings.TrimSpace(*user), string(hash), strings.TrimSpace(*role), *enabled)
-		if err != nil {
-			return err
+		if *role == "user" {
+			pu.SystemUser = pu.Username
+			if *reseller > 0 {
+				pu.ResellerID = reseller
+				pu.OwnerID = reseller
+			}
+			if _, err := st.UpdatePanelUser(pu); err != nil {
+				return err
+			}
+			home := filepath.Join("/home", pu.Username)
+			if err := users.CreateSystemUser(pu.Username, home); err != nil {
+				return err
+			}
+			if err := users.SetSystemPassword(pu.Username, *pass); err != nil {
+				return err
+			}
+		}
+		if *pkgID > 0 {
+			if err := st.AssignPackage(pu.ID, *pkgID, pu.ID); err != nil {
+				return err
+			}
 		}
 		fmt.Println("OK: panel user saved:", pu.Username)
+		return nil
+	case "list":
+		items, err := st.ListPanelUsers()
+		if err != nil {
+			return err
+		}
+		for _, u := range items {
+			fmt.Printf("%d\t%s\t%s\tenabled=%v\n", u.ID, u.Username, u.Role, u.Enabled)
+		}
+		return nil
+	case "edit":
+		fs := flag.NewFlagSet("panel-user edit", flag.ContinueOnError)
+		user := fs.String("user", "", "Username")
+		pass := fs.String("pass", "", "Password")
+		enabled := fs.String("enabled", "", "true|false")
+		pkgID := fs.Int64("package", 0, "Package ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *user == "" {
+			return fmt.Errorf("--user is required")
+		}
+		pu, err := st.GetPanelUserByUsername(*user)
+		if err != nil {
+			return err
+		}
+		if *enabled != "" {
+			pu.Enabled = strings.EqualFold(*enabled, "true")
+		}
+		if *pass != "" {
+			if pu.Role == "user" {
+				if err := users.SetSystemPassword(pu.SystemUser, *pass); err != nil {
+					return err
+				}
+				pu.PasswordHash = "$SHADOW$"
+			} else {
+				hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
+				if err != nil {
+					return err
+				}
+				pu.PasswordHash = string(hash)
+			}
+		}
+		if _, err := st.UpdatePanelUser(pu); err != nil {
+			return err
+		}
+		if *pkgID > 0 {
+			if err := st.AssignPackage(pu.ID, *pkgID, pu.ID); err != nil {
+				return err
+			}
+		}
+		fmt.Println("OK: panel user updated:", pu.Username)
+		return nil
+	case "del":
+		fs := flag.NewFlagSet("panel-user del", flag.ContinueOnError)
+		user := fs.String("user", "", "Username")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		pu, err := st.GetPanelUserByUsername(*user)
+		if err != nil {
+			return err
+		}
+		_ = st.UnassignPackage(pu.ID)
+		if err := st.DeletePanelUser(pu.ID); err != nil {
+			return err
+		}
+		if pu.Role == "user" && pu.SystemUser != "" {
+			_ = users.DeleteSystemUser(pu.SystemUser)
+		}
+		fmt.Println("OK: panel user deleted:", pu.Username)
 		return nil
 	default:
 		return fmt.Errorf("unknown panel-user subcommand: %s", args[0])
 	}
 }
 
-
-
+func cmdPackage(st store.SiteStore, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: package <add|list|show|edit|del>")
+	}
+	switch args[0] {
+	case "list":
+		items, err := st.ListPackages()
+		if err != nil {
+			return err
+		}
+		for _, p := range items {
+			fmt.Printf("%d\t%s\n", p.ID, p.Name)
+		}
+		return nil
+	case "add":
+		fs := flag.NewFlagSet("package add", flag.ContinueOnError)
+		name := fs.String("name", "", "Package name")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		p, err := st.CreatePackage(store.Package{Name: *name, MaxDomains: 5, MaxSubdomains: 20, MaxDiskMB: 1024, MaxPHPWorkers: 5, MaxMySQLDBs: 1, MaxMySQLUsers: 2})
+		if err != nil {
+			return err
+		}
+		fmt.Println("OK: package added:", p.Name)
+		return nil
+	case "show":
+		fs := flag.NewFlagSet("package show", flag.ContinueOnError)
+		name := fs.String("name", "", "Package name")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		items, _ := st.ListPackages()
+		for _, p := range items {
+			if p.Name == *name {
+				fmt.Printf("%+v\n", p)
+			}
+		}
+		return nil
+	case "edit":
+		fs := flag.NewFlagSet("package edit", flag.ContinueOnError)
+		name := fs.String("name", "", "Package name")
+		newName := fs.String("new-name", "", "New package name")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		items, _ := st.ListPackages()
+		for _, p := range items {
+			if p.Name == *name {
+				if *newName != "" {
+					p.Name = *newName
+				}
+				_, err := st.UpdatePackage(p)
+				return err
+			}
+		}
+		return fmt.Errorf("package not found")
+	case "del":
+		fs := flag.NewFlagSet("package del", flag.ContinueOnError)
+		name := fs.String("name", "", "Package name")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		items, _ := st.ListPackages()
+		for _, p := range items {
+			if p.Name == *name {
+				return st.DeletePackage(p.ID)
+			}
+		}
+		return fmt.Errorf("package not found")
+	default:
+		return fmt.Errorf("unknown package subcommand: %s", args[0])
+	}
+}
 
 func runStatus(cfg *config.Config, paths config.Paths) {
 	fmt.Println("NGM config loaded OK")
@@ -217,7 +394,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			clientMax = fs.String("client-max-body-size", "", "Nginx client_max_body_size (e.g. 32M, 128M)")
 			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
 			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
-
 		)
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -227,15 +403,15 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		}
 
 		res, err := core.SiteAdd(context.Background(), app.SiteAddRequest{
-			User:      *user,
-			Domain:    *domain,
-			Mode:      *mode,
-			PHP:       *phpv,
-			Webroot:   *webroot,
-			HTTP3:     *http3,
-			Provision: *provision,
-			SkipCert:  *skipCert,
-			ApplyNow:  *applyNow,
+			User:              *user,
+			Domain:            *domain,
+			Mode:              *mode,
+			PHP:               *phpv,
+			Webroot:           *webroot,
+			HTTP3:             *http3,
+			Provision:         *provision,
+			SkipCert:          *skipCert,
+			ApplyNow:          *applyNow,
 			ClientMaxBodySize: *clientMax,
 			PHPTimeRead:       *phpRead,
 			PHPTimeSend:       *phpSend,
@@ -256,16 +432,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			fmt.Println("WARNING:", w)
 		}
 		return nil
-
-
-
-
-
-
-
-
-
-
 
 	case "list":
 		items, err := core.SiteList(context.Background())
@@ -291,9 +457,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		}
 		return nil
 
-
-
-
 	case "rm":
 		fs := flag.NewFlagSet("site rm", flag.ContinueOnError)
 		var domain = fs.String("domain", "", "Domain to remove (soft delete)")
@@ -303,30 +466,34 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		if *domain == "" {
 			return fmt.Errorf("required: --domain")
 		}
-		if err := core.SiteDisable(context.Background(), *domain); err != nil { return err }
-                d := strings.ToLower(strings.TrimSpace(*domain))
-                fmt.Println("OK: site disabled (pending delete):", d)
+		if err := core.SiteDisable(context.Background(), *domain); err != nil {
+			return err
+		}
+		d := strings.ToLower(strings.TrimSpace(*domain))
+		fmt.Println("OK: site disabled (pending delete):", d)
 		return nil
-
-
 
 	case "edit":
 		fs := flag.NewFlagSet("site edit", flag.ContinueOnError)
 		var (
-			domain  = fs.String("domain", "", "Domain (required)")
-			user    = fs.String("user", "", "Owner username (optional)")
-			mode    = fs.String("mode", "", "Mode: php|proxy|static (optional)")
-			phpv    = fs.String("php", "", "PHP version (optional)")
-			webroot = fs.String("webroot", "", "Webroot (optional)")
-			http3S  = fs.String("http3", "", "Enable HTTP/3: true|false (optional)")
-			enS     = fs.String("enabled", "", "Enabled: true|false (optional)")
-			applyNow = fs.Bool("apply-now", false, "Apply immediately after edit")
+			domain    = fs.String("domain", "", "Domain (required)")
+			user      = fs.String("user", "", "Owner username (optional)")
+			mode      = fs.String("mode", "", "Mode: php|proxy|static (optional)")
+			phpv      = fs.String("php", "", "PHP version (optional)")
+			webroot   = fs.String("webroot", "", "Webroot (optional)")
+			http3S    = fs.String("http3", "", "Enable HTTP/3: true|false (optional)")
+			enS       = fs.String("enabled", "", "Enabled: true|false (optional)")
+			applyNow  = fs.Bool("apply-now", false, "Apply immediately after edit")
 			clientMax = fs.String("client-max-body-size", "", "Nginx client_max_body_size (e.g. 32M, 128M)")
 			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
 			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
 		)
-		if err := fs.Parse(args[1:]); err != nil { return err }
-		if strings.TrimSpace(*domain) == "" { return fmt.Errorf("required: --domain") }
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*domain) == "" {
+			return fmt.Errorf("required: --domain")
+		}
 
 		var http3 *bool
 		if strings.TrimSpace(*http3S) != "" {
@@ -340,19 +507,21 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		}
 
 		updated, err := core.SiteEdit(context.Background(), app.SiteEditRequest{
-			Domain: *domain,
-			User: *user,
-			Mode: *mode,
-			PHP: *phpv,
-			Webroot: *webroot,
-			HTTP3: http3,
-			Enabled: enabled,
-			ApplyNow: *applyNow,
+			Domain:            *domain,
+			User:              *user,
+			Mode:              *mode,
+			PHP:               *phpv,
+			Webroot:           *webroot,
+			HTTP3:             http3,
+			Enabled:           enabled,
+			ApplyNow:          *applyNow,
 			ClientMaxBodySize: *clientMax,
 			PHPTimeRead:       *phpRead,
 			PHPTimeSend:       *phpSend,
 		})
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fmt.Println("OK: site updated")
 		fmt.Printf("  domain : %s\n", updated.Domain)
 		fmt.Printf("  user_id: %d\n", updated.UserID)
@@ -363,10 +532,6 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		fmt.Printf("  enabled: %v\n", updated.Enabled)
 
 		return nil
-
-
-
-
 
 	default:
 		return fmt.Errorf("unknown site subcommand: %s", args[0])
@@ -379,7 +544,9 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 	}
 
 	core, err := app.New(cfg, paths, st)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	switch args[0] {
 	case "list":
@@ -424,7 +591,7 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			return err
 		}
 
-                if info == nil || !info.Exists {
+		if info == nil || !info.Exists {
 			fmt.Printf("Certificate does not exist for: %s\n", *domain)
 			return nil
 		}
@@ -461,7 +628,9 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		defer cancel()
 
 		fmt.Printf("Issuing certificate for %s...\n", *domain)
-		if err := core.CertIssue(ctx, *domain, *applyNow); err != nil { return err }
+		if err := core.CertIssue(ctx, *domain, *applyNow); err != nil {
+			return err
+		}
 		fmt.Println("Certificate issued successfully!")
 
 		return nil
@@ -478,7 +647,9 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		if err := core.CertRenew(ctx, strings.TrimSpace(*domain), *all, *applyNow); err != nil { return err }
+		if err := core.CertRenew(ctx, strings.TrimSpace(*domain), *all, *applyNow); err != nil {
+			return err
+		}
 		fmt.Println("Renewal complete!")
 		return nil
 
@@ -611,8 +782,6 @@ func cmdApply(st store.SiteStore, cfg *config.Config, paths config.Paths, args [
 		return err
 	}
 
-
-
 	core, err := app.New(cfg, paths, st)
 	if err != nil {
 		return err
@@ -657,14 +826,6 @@ func cmdApply(st store.SiteStore, cfg *config.Config, paths config.Paths, args [
 
 	fmt.Printf("Applied OK (%d): %s\n", len(res.Changed), strings.Join(res.Changed, ", "))
 	return nil
-
-
-
-
-
-
-
-
 
 }
 
