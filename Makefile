@@ -13,10 +13,10 @@ RPM_ARCH     := $(shell rpm --eval '%{_arch}')
 
 BIN_DIR := bin
 MAIN_DIR := cmd/ngm/
-BINARY := $(BIN_DIR)/mynginx
+BINARY := $(BIN_DIR)/ngm
 PKGROOT      ?= build/pkgroot
 RPMTOP       ?= packaging/rpm
-SPECFILE     ?= $(RPMTOP)/SPECS/mynginx.spec
+SPECFILE     ?= $(RPMTOP)/SPECS/ngm.spec
 ARCH         ?= x86_64
 
 
@@ -24,7 +24,7 @@ override ARCH    := amd64
 override VERSION := $(shell date +%Y.%m.%d-%H%M%S)
 override PKGROOT := build/pkgroot
 override OUTDIR  := build/deb
-BIN := bin/mynginx
+BIN := bin/ngm
 CONFIG_DIR := configs
 DEB_SRC := packaging/debian/DEBIAN
 
@@ -147,8 +147,8 @@ deb: build
 	@rm -rf "$(PKGROOT)" && mkdir -p "$(PKGROOT)/DEBIAN" \
 		"$(PKGROOT)/usr/bin" \
 		"$(PKGROOT)/lib/systemd/system" \
-		"$(PKGROOT)/usr/share/mynginx/configs" \
-		"$(PKGROOT)/etc/mynginx" \
+		"$(PKGROOT)/usr/share/ngm/configs" \
+		"$(PKGROOT)/etc/ngm" \
 		"$(OUTDIR)"
 
 	# copy DEBIAN metadata/scripts
@@ -156,17 +156,17 @@ deb: build
 	@sed -i "s/^Version:.*/Version: $(VERSION)-1/" "$(PKGROOT)/DEBIAN/control"
 
 	# payload
-	@install -m0755 "$(BIN)" "$(PKGROOT)/usr/bin/mynginx"
-	@install -m0640 "$(CONFIG_DIR)/mynginx.service"   "$(PKGROOT)/lib/systemd/system/mynginx.service"
-	@install -m0640 "$(CONFIG_DIR)/mynginx.conf"      "$(PKGROOT)/etc/mynginx/mynginx.conf"
+	@install -m0755 "$(BIN)" "$(PKGROOT)/usr/bin/ngm"
+	@install -m0640 "$(CONFIG_DIR)/ngm.service"   "$(PKGROOT)/lib/systemd/system/ngm.service"
+	@install -m0640 "$(CONFIG_DIR)/ngm.conf"      "$(PKGROOT)/etc/ngm/ngm.conf"
 
-	@rsync -a --delete "$(CONFIG_DIR)/" "$(PKGROOT)/usr/share/mynginx/configs/"
+	@rsync -a --delete "$(CONFIG_DIR)/" "$(PKGROOT)/usr/share/ngm/configs/"
 	# executables
 	@chmod 0755 "$(PKGROOT)/DEBIAN/postinst" "$(PKGROOT)/DEBIAN/prerm" "$(PKGROOT)/DEBIAN/postrm" 2>/dev/null || true
 
 	# build artifact -> build/deb/
-	@fakeroot dpkg-deb --build "$(PKGROOT)" "$(OUTDIR)/mynginx_$(VERSION)-1_$(ARCH).deb"
-	@echo "📦 Built: $(OUTDIR)/mynginx_$(VERSION)-1_$(ARCH).deb"
+	@fakeroot dpkg-deb --build "$(PKGROOT)" "$(OUTDIR)/ngm_$(VERSION)-1_$(ARCH).deb"
+	@echo "📦 Built: $(OUTDIR)/ngm_$(VERSION)-1_$(ARCH).deb"
 
 
 
@@ -176,17 +176,17 @@ stage-pkgroot: build
 	@echo "→ Staging into $(PKGROOT)"
 	# binary
 	@mkdir -p $(PKGROOT)/usr/bin
-	@cp -f $(BINARY) $(PKGROOT)/usr/bin/mynginx
+	@cp -f $(BINARY) $(PKGROOT)/usr/bin/ngm
 	# configs
-	@mkdir -p $(PKGROOT)/etc/mynginx
-	@[ -f $(PKGROOT)/etc/mynginx/mynginx.conf ]       || cp -f $(CONFIG_DIR)/mynginx.conf       $(PKGROOT)/etc/mynginx/
+	@mkdir -p $(PKGROOT)/etc/ngm
+	@[ -f $(PKGROOT)/etc/ngm/ngm.conf ]       || cp -f $(CONFIG_DIR)/ngm.conf       $(PKGROOT)/etc/ngm/
 	# === ship ALL example configs ===
-	@mkdir -p $(PKGROOT)/usr/share/mynginx/configs
-	@rsync -a --delete "$(CONFIG_DIR)/" "$(PKGROOT)/usr/share/mynginx/configs/"
+	@mkdir -p $(PKGROOT)/usr/share/ngm/configs
+	@rsync -a --delete "$(CONFIG_DIR)/" "$(PKGROOT)/usr/share/ngm/configs/"
 
 	# systemd unit (RPM-friendly path)
 	@mkdir -p $(PKGROOT)/usr/lib/systemd/system
-	@cp -f $(CONFIG_DIR)/mynginx.service $(PKGROOT)/usr/lib/systemd/system/mynginx.service
+	@cp -f $(CONFIG_DIR)/ngm.service $(PKGROOT)/usr/lib/systemd/system/ngm.service
 
 
 rpm_prep_dirs:
@@ -201,13 +201,13 @@ rpm_spec_version:
 stage-rpm: stage-pkgroot
 	@echo "→ Staging RPM systemd unit"
 	@mkdir -p $(PKGROOT)/usr/lib/systemd/system
-	@cp -f $(CONFIG_DIR)/mynginx.service $(PKGROOT)/usr/lib/systemd/system/mynginx.service
+	@cp -f $(CONFIG_DIR)/ngm.service $(PKGROOT)/usr/lib/systemd/system/ngm.service
 
 
 
 # --- RPM (.rpm) --- (μόνο η τελευταία γραμμή αλλάζει)
 rpm: rpm_prep_dirs rpm_spec_version stage-rpm ## Δημιουργεί .rpm
-	@echo "→ Creating RPM package: mynginx-$(RPM_VERSION)-$(RPM_RELEASE)"
+	@echo "→ Creating RPM package: ngm-$(RPM_VERSION)-$(RPM_RELEASE)"
 	@rpmbuild \
 	  --define "_topdir $(CURDIR)/$(RPMTOP)" \
 	  --define "_binary_payload w9.gzdio" \
@@ -226,8 +226,8 @@ rpm: rpm_prep_dirs rpm_spec_version stage-rpm ## Δημιουργεί .rpm
 .PHONY: sync
 sync:
 	@set -euo pipefail; \
-	DEB_FILE="$$(ls -1t build/deb/mynginx_*_amd64.deb | head -n1)"; \
-	RPM_FILE="$$(ls -1t packaging/rpm/RPMS/*/mynginx-*.rpm | head -n1)"; \
+	DEB_FILE="$$(ls -1t build/deb/ngm_*_amd64.deb | head -n1)"; \
+	RPM_FILE="$$(ls -1t packaging/rpm/RPMS/*/ngm-*.rpm | head -n1)"; \
 	[ -n "$$DEB_FILE" ] || { echo "❌ No .deb package found in build/deb"; exit 1; }; \
 	[ -n "$$RPM_FILE" ] || { echo "❌ No .rpm package found in packaging/rpm/RPMS"; exit 1; }; \
 	echo "🌐 Syncing to $(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_DIR)"; \
