@@ -98,14 +98,15 @@ func ZeroLimits() UserLimits {
 }
 
 type Site struct {
-	ID          int64
-	UserID      int64
-	Domain      string
-	Mode        string // "php" | "proxy" | "static"
-	Webroot     string
-	PHPVersion  string
-	EnableHTTP3 bool
-	Enabled     bool
+	ID           int64
+	UserID       int64
+	Domain       string
+	ParentDomain *string
+	Mode         string // "php" | "proxy" | "static"
+	Webroot      string
+	PHPVersion   string
+	EnableHTTP3  bool
+	Enabled      bool
 
 	// Per-site nginx knobs
 	ClientMaxBodySize string // e.g. "32M", "128M"
@@ -133,6 +134,9 @@ type SiteStore interface {
 	UpsertSite(s Site) (Site, error)
 	GetSiteByDomain(domain string) (Site, error)
 	ListSites() ([]Site, error)
+	ListSitesByUserID(userID int64) ([]Site, error)
+	CountRootDomainsByUserID(userID int64) (int, error)
+	CountSubdomainsByUserID(userID int64) (int, error)
 	DisableSiteByDomain(domain string) error
 	// re-enable a previously disabled site
 	EnableSiteByDomain(domain string) error

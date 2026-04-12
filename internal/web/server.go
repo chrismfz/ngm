@@ -362,6 +362,7 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 			"Mode": "new",
 			"Form": map[string]any{
 				"mode":      "php",
+				"parent":    "",
 				"http3":     "true",
 				"provision": "true",
 				"applynow":  "true",
@@ -393,6 +394,7 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 					"user":      strings.TrimSpace(r.FormValue("user")),
 					"domain":    strings.TrimSpace(r.FormValue("domain")),
 					"mode":      strings.TrimSpace(r.FormValue("mode")),
+					"parent":    strings.TrimSpace(r.FormValue("parent")),
 					"php":       strings.TrimSpace(r.FormValue("php")),
 					"webroot":   strings.TrimSpace(r.FormValue("webroot")),
 					"http3":     boolStr(parseBool(r.FormValue("http3"), true)),
@@ -412,15 +414,16 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.FormValue("mode"))
 
 		req := app.SiteAddRequest{
-			User:      strings.TrimSpace(r.FormValue("user")),
-			Domain:    strings.TrimSpace(r.FormValue("domain")),
-			Mode:      mode,
-			PHP:       strings.TrimSpace(r.FormValue("php")),
-			Webroot:   strings.TrimSpace(r.FormValue("webroot")),
-			HTTP3:     parseBool(r.FormValue("http3"), true),
-			Provision: parseBool(r.FormValue("provision"), true),
-			SkipCert:  parseBool(r.FormValue("skipcert"), false),
-			ApplyNow:  parseBool(r.FormValue("applynow"), true),
+			User:         strings.TrimSpace(r.FormValue("user")),
+			Domain:       strings.TrimSpace(r.FormValue("domain")),
+			Mode:         mode,
+			ParentDomain: strings.TrimSpace(r.FormValue("parent")),
+			PHP:          strings.TrimSpace(r.FormValue("php")),
+			Webroot:      strings.TrimSpace(r.FormValue("webroot")),
+			HTTP3:        parseBool(r.FormValue("http3"), true),
+			Provision:    parseBool(r.FormValue("provision"), true),
+			SkipCert:     parseBool(r.FormValue("skipcert"), false),
+			ApplyNow:     parseBool(r.FormValue("applynow"), true),
 
 			ProxyTargets:      targets,
 			ClientMaxBodySize: clientMax,
@@ -443,6 +446,7 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 					"user":      req.User,
 					"domain":    req.Domain,
 					"mode":      req.Mode,
+					"parent":    req.ParentDomain,
 					"php":       req.PHP,
 					"webroot":   req.Webroot,
 					"http3":     boolStr(req.HTTP3),
@@ -468,6 +472,7 @@ func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
 					"user":      req.User,
 					"domain":    req.Domain,
 					"mode":      req.Mode,
+					"parent":    req.ParentDomain,
 					"php":       req.PHP,
 					"webroot":   req.Webroot,
 					"http3":     boolStr(req.HTTP3),
@@ -529,6 +534,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 				"domain":    cur.Domain,
 				"user":      owner,
 				"mode":      cur.Mode,
+				"parent":    valueOrBlank(cur.ParentDomain),
 				"php":       cur.PHPVersion,
 				"webroot":   cur.Webroot,
 				"http3":     boolStr(cur.EnableHTTP3),
@@ -570,6 +576,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 					"domain":    domain,
 					"user":      strings.TrimSpace(r.FormValue("user")),
 					"mode":      mode,
+					"parent":    strings.TrimSpace(r.FormValue("parent")),
 					"php":       strings.TrimSpace(r.FormValue("php")),
 					"webroot":   strings.TrimSpace(r.FormValue("webroot")),
 					"http3":     boolStr(http3),
@@ -587,6 +594,8 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 		req := app.SiteEditRequest{
 			Domain:            domain,
 			User:              strings.TrimSpace(r.FormValue("user")),
+			ParentDomain:      strings.TrimSpace(r.FormValue("parent")),
+			ParentDomainSet:   true,
 			Mode:              mode,
 			PHP:               strings.TrimSpace(r.FormValue("php")),
 			Webroot:           strings.TrimSpace(r.FormValue("webroot")),
@@ -631,6 +640,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 						"domain":    req.Domain,
 						"user":      req.User,
 						"mode":      req.Mode,
+						"parent":    req.ParentDomain,
 						"php":       req.PHP,
 						"webroot":   req.Webroot,
 						"http3":     boolStr(http3),
@@ -655,6 +665,7 @@ func (s *Server) handleSiteEdit(w http.ResponseWriter, r *http.Request) {
 					"domain":    req.Domain,
 					"user":      req.User,
 					"mode":      req.Mode,
+					"parent":    req.ParentDomain,
 					"php":       req.PHP,
 					"webroot":   req.Webroot,
 					"http3":     boolStr(http3),
@@ -1212,6 +1223,13 @@ func boolStr(b bool) string {
 	return "false"
 }
 
+func valueOrBlank(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return strings.TrimSpace(*v)
+}
+
 var (
 	// nginx sizes like: 128m, 32M, 1g, 1024k (we keep it simple)
 	reNginxSize = regexp.MustCompile(`^\d+[kKmMgG]?$`)
@@ -1421,6 +1439,8 @@ const sitesHTML = `{{define "sites"}}
     <thead>
       <tr>
         <th align="left">Domain</th>
+        <th align="left">Parent</th>
+        <th align="center">Type</th>
         <th>Owner</th>
         <th>Mode</th>
         <th>Enabled</th>
@@ -1435,6 +1455,8 @@ const sitesHTML = `{{define "sites"}}
     {{range .Items}}
       <tr>
         <td>{{.Site.Domain}}</td>
+        <td>{{if .Site.ParentDomain}}{{.Site.ParentDomain}}{{else}}-{{end}}</td>
+        <td align="center">{{if .Site.ParentDomain}}subdomain{{else}}root{{end}}</td>
         <td align="center">{{index $.Owners .Site.Domain}}</td>
         <td align="center">{{.Site.Mode}}</td>
         <td align="center">{{if .Site.Enabled}}yes{{else}}no{{end}}</td>
@@ -1508,6 +1530,9 @@ const siteFormHTML = `{{define "site_form"}}
       <div style="display:grid; grid-template-columns: 180px 1fr; gap:10px; max-width:820px;">
         <label>Domain</label>
         <input name="domain" value="{{index .Form "domain"}}" style="padding:8px;" {{if eq .Mode "edit"}}readonly{{end}}>
+
+        <label>Parent Domain</label>
+        <input name="parent" value="{{index .Form "parent"}}" style="padding:8px;" placeholder="optional root domain (e.g. example.com)">
 
         <label>User (owner)</label>
         <input name="user" value="{{index .Form "user"}}" style="padding:8px;" placeholder="e.g. chris">

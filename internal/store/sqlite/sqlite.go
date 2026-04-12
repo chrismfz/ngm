@@ -106,14 +106,14 @@ func (s *Store) UpsertSite(site store.Site) (store.Site, error) {
 	enableHTTP3 := boolInt(site.EnableHTTP3)
 	enabled := boolInt(site.Enabled)
 	_, err := s.db.Exec(`
-		INSERT INTO sites(user_id, domain, mode, webroot, php_version, enable_http3, enabled, client_max_body_size, php_time_read, php_time_send)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO sites(user_id, domain, parent_domain, mode, webroot, php_version, enable_http3, enabled, client_max_body_size, php_time_read, php_time_send)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(domain) DO UPDATE SET
-			user_id=excluded.user_id, mode=excluded.mode, webroot=excluded.webroot, php_version=excluded.php_version,
+			user_id=excluded.user_id, parent_domain=excluded.parent_domain, mode=excluded.mode, webroot=excluded.webroot, php_version=excluded.php_version,
 			enable_http3=excluded.enable_http3, enabled=excluded.enabled,
 			client_max_body_size=excluded.client_max_body_size, php_time_read=excluded.php_time_read, php_time_send=excluded.php_time_send,
 			updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
-	`, site.UserID, site.Domain, site.Mode, site.Webroot, site.PHPVersion, enableHTTP3, enabled, site.ClientMaxBodySize, site.PHPTimeRead, site.PHPTimeSend)
+	`, site.UserID, site.Domain, normalizeNullableString(site.ParentDomain), site.Mode, site.Webroot, site.PHPVersion, enableHTTP3, enabled, site.ClientMaxBodySize, site.PHPTimeRead, site.PHPTimeSend)
 	if err != nil {
 		return store.Site{}, err
 	}
@@ -151,6 +151,35 @@ func (s *Store) ListSites() ([]store.Site, error) {
 		out = append(out, site)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ListSitesByUserID(userID int64) ([]store.Site, error) {
+	rows, err := s.querySites(`WHERE user_id=? ORDER BY domain`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Site
+	for rows.Next() {
+		site, err := scanSite(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, site)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CountRootDomainsByUserID(userID int64) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM sites WHERE user_id=? AND parent_domain IS NULL`, userID).Scan(&count)
+	return count, err
+}
+
+func (s *Store) CountSubdomainsByUserID(userID int64) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM sites WHERE user_id=? AND parent_domain IS NOT NULL`, userID).Scan(&count)
+	return count, err
 }
 
 func (s *Store) DisableSiteByDomain(domain string) error {
@@ -475,6 +504,7 @@ func (s *Store) ListPendingSites() ([]store.Site, error) {
 
 func (s *Store) querySites(clause string, args ...any) (*sql.Rows, error) {
 	q := `SELECT id, user_id, domain, mode, webroot, php_version,
+		parent_domain,
 		COALESCE(client_max_body_size,''), COALESCE(php_time_read,''), COALESCE(php_time_send,''),
 		enable_http3, enabled,
 		created_at, updated_at,
@@ -488,11 +518,16 @@ func scanSite(rows scanner) (store.Site, error) {
 	var out store.Site
 	var created, updated string
 	var enableHTTP3, enabled int
+	var parentDomain sql.NullString
 	var lastApplied sql.NullString
-	if err := rows.Scan(&out.ID, &out.UserID, &out.Domain, &out.Mode, &out.Webroot, &out.PHPVersion,
+	if err := rows.Scan(&out.ID, &out.UserID, &out.Domain, &out.Mode, &out.Webroot, &out.PHPVersion, &parentDomain,
 		&out.ClientMaxBodySize, &out.PHPTimeRead, &out.PHPTimeSend,
 		&enableHTTP3, &enabled, &created, &updated, &out.LastRenderHash, &out.LastApplyStatus, &out.LastApplyError, &lastApplied); err != nil {
 		return store.Site{}, err
+	}
+	if parentDomain.Valid && strings.TrimSpace(parentDomain.String) != "" {
+		val := strings.TrimSpace(parentDomain.String)
+		out.ParentDomain = &val
 	}
 	out.EnableHTTP3 = enableHTTP3 == 1
 	out.Enabled = enabled == 1
@@ -503,6 +538,17 @@ func scanSite(rows scanner) (store.Site, error) {
 		out.LastAppliedAt = &t
 	}
 	return out, nil
+}
+
+func normalizeNullableString(in *string) any {
+	if in == nil {
+		return nil
+	}
+	v := strings.TrimSpace(*in)
+	if v == "" {
+		return nil
+	}
+	return v
 }
 
 func (s *Store) queryPanelUsers(clause string, args ...any) (*sql.Rows, error) {

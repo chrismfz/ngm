@@ -69,7 +69,16 @@ func (s *Store) UpsertSite(site store.Site) (store.Site, error) {
 func (s *Store) GetSiteByDomain(domain string) (store.Site, error) {
 	return store.Site{}, store.ErrNotImplemented
 }
-func (s *Store) ListSites() ([]store.Site, error)        { return nil, store.ErrNotImplemented }
+func (s *Store) ListSites() ([]store.Site, error) { return nil, store.ErrNotImplemented }
+func (s *Store) ListSitesByUserID(userID int64) ([]store.Site, error) {
+	return nil, store.ErrNotImplemented
+}
+func (s *Store) CountRootDomainsByUserID(userID int64) (int, error) {
+	return 0, store.ErrNotImplemented
+}
+func (s *Store) CountSubdomainsByUserID(userID int64) (int, error) {
+	return 0, store.ErrNotImplemented
+}
 func (s *Store) DisableSiteByDomain(domain string) error { return store.ErrNotImplemented }
 func (s *Store) EnableSiteByDomain(domain string) error  { return store.ErrNotImplemented }
 func (s *Store) DeleteSiteByDomain(domain string) error  { return store.ErrNotImplemented }
