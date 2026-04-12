@@ -89,5 +89,14 @@ security:
   audit_log: "/var/log/ngm/audit.log"
 
 storage:
+  # Storage backend driver: sqlite (default) or mysql.
+  driver: "sqlite"
+
+  # DSN for selected driver.
+  # sqlite: absolute path to DB file
+  # mysql : user:pass@tcp(127.0.0.1:3306)/ngm?parseTime=true
+  dsn: "/var/lib/ngm/ngm.db"
+
   # SQLite database file (state store).
+  # Backward-compatibility alias; if dsn is empty this value is used.
   sqlite_path: "/var/lib/ngm/ngm.db"
