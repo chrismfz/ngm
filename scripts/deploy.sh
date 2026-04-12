@@ -2,29 +2,30 @@
 set -euo pipefail
 
 # Minimal Debian-oriented deploy/update script for packaged OpenResty + ngm.
-#
-# Usage examples:
-#   NGM_REPO_URL=https://github.com/yourorg/ngm.git bash deploy-ngm.sh
-#   NGM_REPO_URL=https://github.com/yourorg/ngm.git NGM_REPO_BRANCH=main bash deploy-ngm.sh
-#   NGM_BUILD_OUTPUT=/opt/ngm/bin/ngm bash deploy-ngm.sh
-#
 # Re-runnable:
 # - installs missing packages only
 # - clones repo if missing, otherwise pulls latest changes
 # - rebuilds ngm
+# - ensures /opt/ngm/bin/ngm exists and is mode 0755
 # - refreshes bootstrap cert + nginx.conf
+# - installs ngm systemd unit from the repo, reloads systemd, and enables it
+#   without starting it
 
 MASTER_CONF_URL="${MASTER_CONF_URL:-https://raw.githubusercontent.com/chrismfz/ngm/refs/heads/main/nginx.conf.master}"
-NGM_REPO_URL="https://github.com/chrismfz/ngm.git"
+NGM_REPO_URL="${NGM_REPO_URL:-https://github.com/chrismfz/ngm.git}"
 NGM_REPO_BRANCH="${NGM_REPO_BRANCH:-main}"
 NGM_REPO_DIR="${NGM_REPO_DIR:-/opt/ngm}"
-NGM_INSTALL_BIN="${NGM_INSTALL_BIN:-/usr/local/bin/ngm}"
+NGM_INSTALL_BIN="${NGM_INSTALL_BIN:-/opt/ngm/bin/ngm}"
 NGM_BUILD_OUTPUT="${NGM_BUILD_OUTPUT:-}"
+NGM_SYSTEMD_SRC="${NGM_SYSTEMD_SRC:-${NGM_REPO_DIR}/configs/ngm.service}"
+NGM_SYSTEMD_DST="${NGM_SYSTEMD_DST:-/etc/systemd/system/ngm.service}"
 
 OPENRESTY_PREFIX="/usr/local/openresty"
 NGINX_PREFIX="${OPENRESTY_PREFIX}/nginx"
 HTML_PATH="${NGINX_PREFIX}/html"
 SELFSIGNED_DIR="${NGINX_PREFIX}/conf/selfsigned"
+
+WEB_GROUP="root"
 
 log() {
     echo "[+] $*"
@@ -318,8 +319,8 @@ find_ngm_build_output() {
     fi
 
     candidates+=(
-        "${NGM_REPO_DIR}/ngm"
         "${NGM_REPO_DIR}/bin/ngm"
+        "${NGM_REPO_DIR}/ngm"
         "${NGM_REPO_DIR}/build/ngm"
         "${NGM_REPO_DIR}/dist/ngm"
         "${NGM_REPO_DIR}/cmd/ngm/ngm"
@@ -337,10 +338,38 @@ find_ngm_build_output() {
 
 install_ngm_binary() {
     local src
+    local dst_dir
+
     src="$(find_ngm_build_output)" || die "Built ngm binary not found. Set NGM_BUILD_OUTPUT explicitly."
+
+    dst_dir="$(dirname "${NGM_INSTALL_BIN}")"
+    mkdir -p "${dst_dir}"
+
+    if [ "$(readlink -f "$src")" = "$(readlink -f "${NGM_INSTALL_BIN}")" ]; then
+        chmod 0755 "${NGM_INSTALL_BIN}"
+        log "ngm binary already in place, ensured mode 0755: ${NGM_INSTALL_BIN}"
+        return 0
+    fi
 
     install -m 0755 "$src" "${NGM_INSTALL_BIN}"
     log "Installed ngm binary: ${src} -> ${NGM_INSTALL_BIN}"
+}
+
+install_ngm_systemd_unit() {
+    [ -f "${NGM_SYSTEMD_SRC}" ] || die "ngm systemd unit not found: ${NGM_SYSTEMD_SRC}"
+
+    backup_if_exists "${NGM_SYSTEMD_DST}"
+    install -m 0644 "${NGM_SYSTEMD_SRC}" "${NGM_SYSTEMD_DST}"
+    log "Installed systemd unit: ${NGM_SYSTEMD_SRC} -> ${NGM_SYSTEMD_DST}"
+}
+
+reload_systemd() {
+    if command_exists systemctl; then
+        log "Reloading systemd daemon"
+        systemctl daemon-reload
+    else
+        warn "systemctl not found; skipping daemon-reload"
+    fi
 }
 
 test_nginx_config() {
@@ -359,10 +388,19 @@ test_nginx_config() {
 
 enable_openresty() {
     if command_exists systemctl; then
-        log "Enabling and starting OpenResty service"
-        systemctl enable --now openresty
+        log "Enabling OpenResty service"
+        systemctl enable openresty
     else
-        warn "systemctl not found; skipping service enable/start"
+        warn "systemctl not found; skipping service enable"
+    fi
+}
+
+enable_ngm_service() {
+    if command_exists systemctl; then
+        log "Enabling ngm service (not starting it)"
+        systemctl enable ngm
+    else
+        warn "systemctl not found; skipping ngm enable"
     fi
 }
 
@@ -396,11 +434,15 @@ main() {
     ensure_ngm_repo
     build_ngm
     install_ngm_binary
+    install_ngm_systemd_unit
+    reload_systemd
     test_nginx_config
     enable_openresty
+    enable_ngm_service
     show_versions
 
     log "Deployment/update complete"
 }
 
 main "$@"
+
