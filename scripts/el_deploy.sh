@@ -17,6 +17,8 @@ set -euo pipefail
 #
 # Example:
 #   chmod +x bootstrap_ngm_el10_nobody.sh
+#   # Pre-run: place your config file at /opt/ngm/config.yaml (or set CFG_FILE to another path)
+#   install -m 0644 ./config.yaml /opt/ngm/config.yaml
 #   ./bootstrap_ngm_el10_nobody.sh
 
 REPO_URL="${REPO_URL:-https://github.com/chrismfz/ngm.git}"
@@ -208,8 +210,9 @@ disable_firewalld_if_requested() {
 
 maybe_run_ngm_provision() {
   if [[ ! -f "$CFG_FILE" ]]; then
-    echo "ERROR: Config file not found: $CFG_FILE" >&2
-    echo "ERROR: Deployment aborted. Provide a valid config and re-run deployment." >&2
+    echo "ERROR: Config file not found at resolved CFG_FILE path: $CFG_FILE" >&2
+    echo "ERROR: Example fix: install -m 0644 ./config.yaml \"$CFG_FILE\"" >&2
+    echo "ERROR: Deployment aborted. Provide a valid config at $CFG_FILE and re-run deployment." >&2
     return 1
   fi
 
@@ -256,6 +259,7 @@ Notes:
 Suggested checks:
   "$BIN_DIR/ngm" -c "$CFG_FILE" help
   "$BIN_DIR/ngm" -c "$CFG_FILE" provision test
+  install -m 0644 ./config.yaml "$CFG_FILE"   # if config is missing
   systemctl status $PHP_SERVICE
   systemctl status nginx ngm --no-pager
   ls -ld $PHP_POOLS_DIR $PHP_SOCK_DIR
