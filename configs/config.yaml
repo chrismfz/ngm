@@ -34,8 +34,8 @@ nginx:
   service_name: "nginx"
   # Root directory for nginx cache data (absolute path).
   cache_root: "/var/cache/nginx"
-  user: "www-data"
-  group: "www-data"
+  user: "nginx"
+  group: "nobody"
 
   apply:
     # Staging directory used for atomic generation/apply (relative to nginx.root).
@@ -74,11 +74,11 @@ phpfpm:
   versions:
     "8.4":
       pools_dir: "/etc/php/8.4/fpm/pool.d"
-      service: "php84-fpm"
+      service: "php84-php-fpm"
       sock_dir: "/run/php"
     "8.3":
       pools_dir: "/etc/php/8.3/fpm/pool.d"
-      service: "php83-fpm"
+      service: "php83-php-fpm"
       sock_dir: "/run/php"
 
 hosting:
