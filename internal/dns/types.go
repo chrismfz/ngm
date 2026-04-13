@@ -18,6 +18,15 @@ type SiteDNSInput struct {
 	SiteKind     SiteKind
 }
 
+type DNSEntry struct {
+	FQDN       string
+	Zone       string
+	Kind       string
+	Status     string
+	RecordText []string
+	ZoneFile   string
+}
+
 func (in SiteDNSInput) Validate() error {
 	if in.FQDN == "" {
 		return fmt.Errorf("fqdn is required")

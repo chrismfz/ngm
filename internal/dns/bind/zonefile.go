@@ -21,26 +21,29 @@ func (p *Provider) zonePath(zone string) string {
 	return filepath.Join(p.cfg.Bind.ZonesDir, zone+p.cfg.Bind.ZoneFileSuffix)
 }
 
-func (p *Provider) loadZone(zone string) (zoneModel, error) {
+func (p *Provider) loadZone(zone string, fallbackTTL uint32) (zoneModel, error) {
 	origin := dns.Fqdn(strings.ToLower(strings.TrimSpace(zone)))
 	path := p.zonePath(zone)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return zoneModel{}, err
 	}
-	z := zoneModel{Origin: origin, TTL: p.templateFor("default").TTL}
+	z := zoneModel{Origin: origin, TTL: 0}
 	parser := dns.NewZoneParser(strings.NewReader(string(b)), origin, path)
 	for rr, ok := parser.Next(); ok; rr, ok = parser.Next() {
 		if rr == nil {
 			continue
 		}
-		if z.TTL == 0 {
+		if z.TTL == 0 && rr.Header().Ttl > 0 {
 			z.TTL = rr.Header().Ttl
 		}
 		z.RRs = append(z.RRs, rr)
 	}
 	if err := parser.Err(); err != nil {
 		return zoneModel{}, fmt.Errorf("parse zone %s: %w", zone, err)
+	}
+	if z.TTL == 0 {
+		z.TTL = fallbackTTL
 	}
 	if z.TTL == 0 {
 		z.TTL = 3600
@@ -92,6 +95,18 @@ func removeRROnNameAndTypeAndData(rrs []dns.RR, name string, rrType uint16, data
 	for _, rr := range rrs {
 		h := rr.Header()
 		if h.Name == name && h.Rrtype == rrType && dataMatch(rr) {
+			continue
+		}
+		out = append(out, rr)
+	}
+	return out
+}
+
+func removeRROnNameAndType(rrs []dns.RR, name string, rrType uint16) []dns.RR {
+	out := rrs[:0]
+	for _, rr := range rrs {
+		h := rr.Header()
+		if h.Name == name && h.Rrtype == rrType {
 			continue
 		}
 		out = append(out, rr)

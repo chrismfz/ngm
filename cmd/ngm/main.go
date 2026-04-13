@@ -69,6 +69,8 @@ func printHelp(args []string) {
 	switch args[1] {
 	case "site":
 		printSiteUsage()
+	case "dns":
+		printDNSUsage()
 	case "cert":
 		printCertUsage()
 	case "panel-user":
@@ -102,6 +104,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  serve                               Start local UI/API server")
 	fmt.Println("  site add|edit|list|rm               Site management")
+	fmt.Println("  dns list                            DNS visibility")
 	fmt.Println("  apply                               Apply nginx changes")
 	fmt.Println("  cert list|info|issue|renew|check    Certificate management")
 	fmt.Println("  panel-user add|list|edit|del        Manage admin/reseller/user panel users")
@@ -131,7 +134,7 @@ func printSiteUsage() {
 	fmt.Println("Subcommands:")
 	fmt.Println("  add     Create a site (root domain or subdomain)")
 	fmt.Println("  edit    Update owner/mode/php/webroot/http3/enabled")
-	fmt.Println("  list    List sites with parent, mode, state, php and webroot")
+	fmt.Println("  list    List sites with parent, mode, state, dns, php and webroot")
 	fmt.Println("  rm      Disable a site (soft remove; config removed on apply)")
 	fmt.Println("")
 	fmt.Println("Domain model:")
@@ -161,6 +164,15 @@ func printSiteUsage() {
 	fmt.Println("Apply/cert guidance:")
 	fmt.Println("  If DNS/webroot is not ready yet, prefer --skip-cert or --apply-now=false.")
 	fmt.Println("  For proxy mode, ensure at least one target exists before apply-now.")
+}
+
+func printDNSUsage() {
+	fmt.Println("Usage: ngm dns list [--domain <domain>]")
+	fmt.Println("Subcommands:")
+	fmt.Println("  list    List DNS status for managed sites")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm dns list")
+	fmt.Println("  ngm dns list --domain example.com")
 }
 
 func printCertUsage() {
@@ -328,6 +340,11 @@ func run() int {
 	case "cert":
 		if err := cmdCert(st, cfg, paths, args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "cert: %v\n", err)
+			return 1
+		}
+	case "dns":
+		if err := cmdDNS(st, cfg, paths, args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "dns: %v\n", err)
 			return 1
 		}
 
@@ -887,8 +904,8 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			return nil
 		}
 
-		fmt.Printf("%-25s  %-25s  %-6s  %-5s  %-9s  %-10s  %-20s  %-40s  %s\n",
-			"DOMAIN", "PARENT", "MODE", "HTTP3", "ENABLED", "STATE", "LAST_APPLIED", "WEBROOT", "PHP")
+		fmt.Printf("%-25s  %-25s  %-8s  %-6s  %-5s  %-9s  %-10s  %-20s  %-40s  %s\n",
+			"DOMAIN", "PARENT", "DNS", "MODE", "HTTP3", "ENABLED", "STATE", "LAST_APPLIED", "WEBROOT", "PHP")
 
 		for _, it := range items {
 			s := it.Site
@@ -900,8 +917,8 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			if s.ParentDomain != nil && strings.TrimSpace(*s.ParentDomain) != "" {
 				parent = *s.ParentDomain
 			}
-			fmt.Printf("%-25s  %-25s  %-6s  %-5v  %-9s  %-10s  %-20s  %-40s  %s\n",
-				s.Domain, parent, s.Mode, s.EnableHTTP3, enabledStr, it.State, it.Last, trimLen(s.Webroot, 40), s.PHPVersion)
+			fmt.Printf("%-25s  %-25s  %-8s  %-6s  %-5v  %-9s  %-10s  %-20s  %-40s  %s\n",
+				s.Domain, parent, it.DNSStatus, s.Mode, s.EnableHTTP3, enabledStr, it.State, it.Last, trimLen(s.Webroot, 40), s.PHPVersion)
 		}
 		return nil
 
@@ -1000,6 +1017,48 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 
 	default:
 		return fmt.Errorf("unknown site subcommand: %s", args[0])
+	}
+}
+
+func cmdDNS(st store.SiteStore, cfg *config.Config, paths config.Paths, args []string) error {
+	if len(args) == 0 {
+		printDNSUsage()
+		return nil
+	}
+	if isHelpArg(args[0]) || args[0] == "help" {
+		printDNSUsage()
+		return nil
+	}
+	core, err := app.New(cfg, paths, st)
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("dns list", flag.ContinueOnError)
+		domain := fs.String("domain", "", "Optional domain filter")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		entries, err := core.DNSList(context.Background(), *domain)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			fmt.Println("(no dns entries)")
+			return nil
+		}
+		fmt.Printf("%-32s %-25s %-18s %-10s %-20s %s\n", "FQDN", "ZONE", "KIND", "STATUS", "SUMMARY", "ZONE_FILE")
+		for _, e := range entries {
+			summary := "-"
+			if len(e.RecordText) > 0 {
+				summary = strings.Join(e.RecordText, "; ")
+			}
+			fmt.Printf("%-32s %-25s %-18s %-10s %-20s %s\n", trimLen(e.FQDN, 32), e.Zone, e.Kind, e.Status, trimLen(summary, 20), trimLen(e.ZoneFile, 80))
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown dns subcommand: %s", args[0])
 	}
 }
 

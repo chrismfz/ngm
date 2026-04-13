@@ -39,7 +39,7 @@ func (p *Provider) EnsureRootSite(ctx context.Context, in appdns.SiteDNSInput) e
 	}
 	zone := normalizeDomain(in.FQDN)
 	tpl := p.templateFor(in.Template)
-	zm, err := p.loadZone(zone)
+	zm, err := p.loadZone(zone, tpl.TTL)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return err
@@ -72,7 +72,7 @@ func (p *Provider) EnsureSubdomainSite(ctx context.Context, in appdns.SiteDNSInp
 	}
 	zone := normalizeDomain(in.ParentDomain)
 	fqdn := dnslib.Fqdn(normalizeDomain(in.FQDN))
-	zm, err := p.loadZone(zone)
+	zm, err := p.loadZone(zone, p.defaultTTL())
 	if err != nil {
 		return fmt.Errorf("load parent zone %s: %w", zone, err)
 	}
@@ -97,25 +97,15 @@ func (p *Provider) DeleteSubdomainSite(ctx context.Context, in appdns.SiteDNSInp
 	_ = ctx
 	zone := normalizeDomain(in.ParentDomain)
 	fqdn := dnslib.Fqdn(normalizeDomain(in.FQDN))
-	zm, err := p.loadZone(zone)
+	zm, err := p.loadZone(zone, p.defaultTTL())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	if in.DefaultIPv4 != "" {
-		zm.RRs = removeRROnNameAndTypeAndData(zm.RRs, fqdn, dnslib.TypeA, func(rr dnslib.RR) bool {
-			a, ok := rr.(*dnslib.A)
-			return ok && a.A.String() == in.DefaultIPv4
-		})
-	}
-	if in.DefaultIPv6 != "" {
-		zm.RRs = removeRROnNameAndTypeAndData(zm.RRs, fqdn, dnslib.TypeAAAA, func(rr dnslib.RR) bool {
-			a, ok := rr.(*dnslib.AAAA)
-			return ok && a.AAAA.String() == in.DefaultIPv6
-		})
-	}
+	zm.RRs = removeRROnNameAndType(zm.RRs, fqdn, dnslib.TypeA)
+	zm.RRs = removeRROnNameAndType(zm.RRs, fqdn, dnslib.TypeAAAA)
 	if err := p.writeZone(zone, zm); err != nil {
 		return err
 	}
@@ -235,4 +225,88 @@ func (p *Provider) rndcReconfig() error {
 
 func normalizeDomain(v string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(v)), ".")
+}
+
+func (p *Provider) defaultTTL() uint32 {
+	tpl := p.templateFor(p.cfg.DefaultTemplate)
+	if tpl.TTL == 0 {
+		return 3600
+	}
+	return tpl.TTL
+}
+
+func (p *Provider) GetSiteEntry(ctx context.Context, in appdns.SiteDNSInput) (appdns.DNSEntry, error) {
+	_ = ctx
+	if err := in.Validate(); err != nil {
+		return appdns.DNSEntry{}, err
+	}
+	zone := normalizeDomain(in.FQDN)
+	if in.SiteKind == appdns.SiteKindSubdomain {
+		zone = normalizeDomain(in.ParentDomain)
+	}
+	entry := appdns.DNSEntry{
+		FQDN:     dnslib.Fqdn(normalizeDomain(in.FQDN)),
+		Zone:     zone,
+		ZoneFile: p.zonePath(zone),
+	}
+	if in.SiteKind == appdns.SiteKindRoot {
+		entry.Kind = "root-zone"
+		if _, err := os.Stat(entry.ZoneFile); err != nil {
+			if os.IsNotExist(err) {
+				entry.Status = "missing"
+				return entry, nil
+			}
+			entry.Status = "error"
+			return entry, err
+		}
+		zm, err := p.loadZone(zone, p.defaultTTL())
+		if err != nil {
+			entry.Status = "error"
+			return entry, err
+		}
+		var soaCount, nsCount int
+		for _, rr := range zm.RRs {
+			switch rr.Header().Rrtype {
+			case dnslib.TypeSOA:
+				soaCount++
+			case dnslib.TypeNS:
+				nsCount++
+			}
+		}
+		entry.Status = "zone"
+		entry.RecordText = []string{fmt.Sprintf("SOA:%d NS:%d", soaCount, nsCount)}
+		return entry, nil
+	}
+	entry.Kind = "subdomain-record"
+	zm, err := p.loadZone(zone, p.defaultTTL())
+	if err != nil {
+		if os.IsNotExist(err) {
+			entry.Status = "missing"
+			return entry, nil
+		}
+		entry.Status = "error"
+		return entry, err
+	}
+	fqdn := dnslib.Fqdn(normalizeDomain(in.FQDN))
+	var aCount, aaaaCount int
+	for _, rr := range zm.RRs {
+		h := rr.Header()
+		if h.Name != fqdn {
+			continue
+		}
+		switch h.Rrtype {
+		case dnslib.TypeA:
+			aCount++
+		case dnslib.TypeAAAA:
+			aaaaCount++
+		}
+	}
+	if aCount == 0 && aaaaCount == 0 {
+		entry.Status = "missing"
+		entry.RecordText = []string{"A:0 AAAA:0"}
+		return entry, nil
+	}
+	entry.Status = "record"
+	entry.RecordText = []string{fmt.Sprintf("A:%d AAAA:%d", aCount, aaaaCount)}
+	return entry, nil
 }

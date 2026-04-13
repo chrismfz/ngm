@@ -64,6 +64,7 @@ func New(cfg *config.Config, paths config.Paths, st store.SiteStore) (*Server, e
 	template.Must(tpl.New("user_form").Parse(userFormHTML))
 	template.Must(tpl.New("resellers").Parse(resellersHTML))
 	template.Must(tpl.New("reseller_form").Parse(resellerFormHTML))
+	template.Must(tpl.New("dns").Parse(dnsHTML))
 
 	return &Server{
 		cfg:      cfg,
@@ -94,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ui/sites/disable", s.requireAuth(s.handleSiteDisable))
 	mux.HandleFunc("/ui/sites/enable", s.requireAuth(s.handleSiteEnable))
 	mux.HandleFunc("/ui/sites/delete", s.requireAuth(s.handleSiteDelete))
+	mux.HandleFunc("/ui/dns", s.requireAuth(s.handleDNS))
 
 	// proxy targets
 	mux.HandleFunc("/ui/sites/targets", s.requireAuth(s.handleProxyTargets))
@@ -361,6 +363,44 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 		"Owners": owners,
 		"Certs":  certs,
 	})
+}
+
+func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
+	sess, _ := s.sessionFromCtx(r)
+	entries, err := s.core.DNSList(r.Context(), "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	filtered := make([]appdnsEntryView, 0, len(entries))
+	for _, e := range entries {
+		domain := strings.TrimSuffix(e.FQDN, ".")
+		if !s.siteVisibleToSession(r.Context(), sess, domain) {
+			continue
+		}
+		summary := "-"
+		if len(e.RecordText) > 0 {
+			summary = strings.Join(e.RecordText, "; ")
+		}
+		filtered = append(filtered, appdnsEntryView{
+			FQDN:     domain,
+			Zone:     e.Zone,
+			Kind:     e.Kind,
+			Status:   e.Status,
+			Summary:  summary,
+			ZoneFile: e.ZoneFile,
+		})
+	}
+	s.render(w, r, "DNS", "dns", map[string]any{"Items": filtered})
+}
+
+type appdnsEntryView struct {
+	FQDN     string
+	Zone     string
+	Kind     string
+	Status   string
+	Summary  string
+	ZoneFile string
 }
 
 func (s *Server) handleSiteNew(w http.ResponseWriter, r *http.Request) {
@@ -1811,6 +1851,8 @@ const contentHTML = `{{define "content"}}
     {{template "proxy_targets" .}}
   {{- else if eq .Page "cert_check" -}}
     {{template "cert_check" .}}
+  {{- else if eq .Page "dns" -}}
+    {{template "dns" .}}
   {{- else -}}
     <h2>Unknown page</h2>
     <p>Page: <code>{{.Page}}</code></p>
@@ -1826,6 +1868,7 @@ const menuHTML = `{{define "menu"}}
       <a href="/ui/users">Users</a>
       <a href="/ui/packages">Packages</a>
       <a href="/ui/sites">Sites</a>
+      <a href="/ui/dns">DNS</a>
       <a href="/ui/certs">Certificates</a>
       <a href="/ui/apply">Apply</a>
       <a href="/ui/backup">Backups</a>
@@ -1833,10 +1876,12 @@ const menuHTML = `{{define "menu"}}
       <a href="/ui/users">My Users</a>
       <a href="/ui/packages">Packages</a>
       <a href="/ui/sites">Sites</a>
+      <a href="/ui/dns">DNS</a>
       <a href="/ui/certs">Certificates</a>
       <a href="/ui/backup">Backups</a>
     {{else}}
       <a href="/ui/sites">My Domains</a>
+      <a href="/ui/dns">DNS</a>
       <a href="/ui/certs">Certificates</a>
       <a href="/ui/backup">Backup</a>
     {{end}}
@@ -1982,6 +2027,7 @@ const sitesHTML = `{{define "sites"}}
         <th>Owner</th>
         <th>Mode</th>
         <th>Enabled</th>
+        <th>DNS</th>
         <th>TLS</th>
         <th>State</th>
         <th>Last Applied</th>
@@ -1998,6 +2044,7 @@ const sitesHTML = `{{define "sites"}}
         <td align="center">{{index $.Owners .Site.Domain}}</td>
         <td align="center">{{.Site.Mode}}</td>
         <td align="center">{{if .Site.Enabled}}yes{{else}}no{{end}}</td>
+        <td align="center">{{.DNSStatus}}</td>
         <td align="center">
           {{ $ci := index $.Certs .Site.Domain }}
           {{ if $ci }}
@@ -2043,6 +2090,37 @@ const sitesHTML = `{{define "sites"}}
     {{end}}
     </tbody>
   </table>
+{{end}}`
+
+const dnsHTML = `{{define "dns"}}
+<h2>DNS</h2>
+<p style="opacity:.8;">Read-only DNS visibility for managed sites.</p>
+<table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%;">
+  <thead>
+    <tr>
+      <th align="left">FQDN</th>
+      <th align="left">Zone</th>
+      <th align="left">Kind</th>
+      <th align="left">Status</th>
+      <th align="left">Summary</th>
+      <th align="left">Zone File</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Items}}
+    <tr>
+      <td>{{.FQDN}}</td>
+      <td>{{.Zone}}</td>
+      <td>{{.Kind}}</td>
+      <td>{{.Status}}</td>
+      <td>{{.Summary}}</td>
+      <td>{{.ZoneFile}}</td>
+    </tr>
+    {{else}}
+    <tr><td colspan="6" align="center">No DNS entries visible.</td></tr>
+    {{end}}
+  </tbody>
+</table>
 {{end}}`
 
 const siteFormHTML = `{{define "site_form"}}
