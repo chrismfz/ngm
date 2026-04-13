@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"mynginx/internal/bootstrap"
 	appdns "mynginx/internal/dns"
 	"mynginx/internal/store"
 	"mynginx/internal/users"
@@ -425,7 +426,11 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 			ctx2, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			if err := a.CertIssue(ctx2, domain, true /* apply */); err != nil {
-				out.Warnings = append(out.Warnings, "certificate issuance failed: "+err.Error())
+				if errors.Is(err, bootstrap.ErrProvisionInitNotCompleted) {
+					out.Warnings = append(out.Warnings, "certificate issuance blocked: "+bootstrap.ErrProvisionInitNotCompleted.Error())
+				} else {
+					out.Warnings = append(out.Warnings, "certificate issuance failed: "+err.Error())
+				}
 			}
 		}
 	}

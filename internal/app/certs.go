@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 
+	"mynginx/internal/bootstrap"
 	"mynginx/internal/certs"
 )
 
@@ -19,13 +20,14 @@ func (a *App) CertList() ([]*certs.CertInfo, error) {
 	return a.certMgr().ListCerts()
 }
 
-
 func (a *App) CertInfo(domain string) (*certs.CertInfo, error) {
 	return a.certMgr().GetCertInfo(domain)
 }
 
-
 func (a *App) CertIssue(ctx context.Context, domain string, applyAfter bool) error {
+	if err := bootstrap.EnsureProvisionReady(a.paths); err != nil {
+		return err
+	}
 	m := a.certMgr()
 	if err := m.IssueCert(ctx, domain); err != nil {
 		return err
@@ -54,7 +56,6 @@ func (a *App) CertRenew(ctx context.Context, domain string, all bool, applyAfter
 	}
 	return nil
 }
-
 
 func (a *App) CertCheck(days int) ([]*certs.CertInfo, error) {
 	return a.certMgr().CheckExpiringSoon(days)

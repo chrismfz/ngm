@@ -60,6 +60,10 @@ func Init(cfg *config.Config, paths config.Paths) error {
 	}
 
 	fmt.Printf("Provision init complete: active global listener cert = %s\n", activeType)
+	if err := WriteProvisionReadyMarker(paths); err != nil {
+		return err
+	}
+	fmt.Printf("Provision marker: %s\n", provisionReadyMarkerPath)
 	fmt.Printf("Master config: %s\n", paths.NginxMainConf)
 	return nil
 }

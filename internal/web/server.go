@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"mynginx/internal/app"
 	"mynginx/internal/auth"
 	"mynginx/internal/backup"
+	"mynginx/internal/bootstrap"
 	"mynginx/internal/config"
 	"mynginx/internal/store"
 	"mynginx/internal/users"
@@ -1011,6 +1013,10 @@ func (s *Server) handleCertIssue(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := s.core.CertIssue(ctx, d, true); err != nil {
+		if errors.Is(err, bootstrap.ErrProvisionInitNotCompleted) {
+			http.Error(w, bootstrap.ErrProvisionInitNotCompleted.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
