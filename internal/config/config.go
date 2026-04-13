@@ -23,6 +23,7 @@ type Config struct {
 
 type APIConfig struct {
 	Listen   string   `yaml:"listen"`
+	Hostname string   `yaml:"hostname"`
 	Tokens   []string `yaml:"tokens"`
 	AllowIPs []string `yaml:"allow_ips"`
 }
@@ -32,6 +33,8 @@ type NginxConfig struct {
 	MainConf string           `yaml:"main_conf"`
 	SitesDir string           `yaml:"sites_dir"`
 	Bin      string           `yaml:"bin"`
+	User     string           `yaml:"user"`
+	Group    string           `yaml:"group"`
 	Apply    NginxApplyConfig `yaml:"apply"`
 }
 
@@ -112,6 +115,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Nginx.Bin == "" {
 		c.Nginx.Bin = "sbin/nginx"
+	}
+	if c.Nginx.User == "" {
+		c.Nginx.User = "www-data"
+	}
+	if c.Nginx.Group == "" {
+		c.Nginx.Group = "www-data"
 	}
 	if c.Nginx.Apply.StagingDir == "" {
 		c.Nginx.Apply.StagingDir = "conf/.staging"

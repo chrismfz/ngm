@@ -23,6 +23,7 @@ import (
 
 	"mynginx/internal/app"
 	"mynginx/internal/backup"
+	"mynginx/internal/bootstrap"
 
 	"mynginx/internal/web"
 
@@ -78,6 +79,8 @@ func printHelp(args []string) {
 		printBackupUsage()
 	case "restore":
 		printRestoreUsage()
+	case "provision":
+		printProvisionUsage()
 	case "admin":
 		printAdminUsage()
 	default:
@@ -106,6 +109,7 @@ func printUsage() {
 	fmt.Println("  package add|list|show|edit|del      Hosting package management")
 	fmt.Println("  backup user|reseller|all            Create backups")
 	fmt.Println("  restore --file <archive.tar.gz> [--new-user <username>]")
+	fmt.Println("  provision init|test                 Bootstrap/test nginx master config")
 	fmt.Println("")
 	fmt.Println("Roles:")
 	fmt.Println("  admin")
@@ -213,6 +217,14 @@ func printAdminUsage() {
 	fmt.Println("  ngm admin edit --user rootpanel --enabled=false")
 }
 
+func printProvisionUsage() {
+	fmt.Println("Usage: ngm provision <init|test>")
+	fmt.Println("Subcommands: init, test")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm provision init")
+	fmt.Println("  ngm provision test")
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -243,6 +255,14 @@ func run() int {
 		return 1
 	}
 	paths := cfg.ResolvePaths()
+
+	if len(args) > 0 && args[0] == "provision" {
+		if err := cmdProvision(cfg, paths, args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "provision: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 
 	// Open store early (for CLI commands)
 	st, err := store.Open(cfg.Storage.Driver, cfg.Storage.DSN)
@@ -330,6 +350,25 @@ func cmdServe(st store.SiteStore, cfg *config.Config, paths config.Paths) error 
 	fmt.Println("NGM UI listening on:", cfg.API.Listen)
 	fmt.Println("Open: http://" + cfg.API.Listen + "/ui/login")
 	return srv.Serve(ctx, cfg.API.Listen)
+}
+
+func cmdProvision(cfg *config.Config, paths config.Paths, args []string) error {
+	if len(args) == 0 {
+		printProvisionUsage()
+		return nil
+	}
+	if isHelpArg(args[0]) || args[0] == "help" {
+		printProvisionUsage()
+		return nil
+	}
+	switch args[0] {
+	case "init":
+		return bootstrap.Init(cfg, paths)
+	case "test":
+		return bootstrap.Test(cfg, paths)
+	default:
+		return fmt.Errorf("unknown provision subcommand: %s", args[0])
+	}
 }
 
 func cmdPanelUser(st store.SiteStore, args []string) error {
