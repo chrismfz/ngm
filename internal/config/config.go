@@ -29,14 +29,15 @@ type APIConfig struct {
 }
 
 type NginxConfig struct {
-	Root      string           `yaml:"root"`
-	MainConf  string           `yaml:"main_conf"`
-	SitesDir  string           `yaml:"sites_dir"`
-	Bin       string           `yaml:"bin"`
-	CacheRoot string           `yaml:"cache_root"`
-	User      string           `yaml:"user"`
-	Group     string           `yaml:"group"`
-	Apply     NginxApplyConfig `yaml:"apply"`
+	Root        string           `yaml:"root"`
+	MainConf    string           `yaml:"main_conf"`
+	SitesDir    string           `yaml:"sites_dir"`
+	Bin         string           `yaml:"bin"`
+	ServiceName string           `yaml:"service_name"`
+	CacheRoot   string           `yaml:"cache_root"`
+	User        string           `yaml:"user"`
+	Group       string           `yaml:"group"`
+	Apply       NginxApplyConfig `yaml:"apply"`
 }
 
 type NginxApplyConfig struct {
@@ -117,6 +118,9 @@ func (c *Config) applyDefaults() {
 	if c.Nginx.Bin == "" {
 		c.Nginx.Bin = "sbin/nginx"
 	}
+	if c.Nginx.ServiceName == "" {
+		c.Nginx.ServiceName = "nginx"
+	}
 	if c.Nginx.CacheRoot == "" {
 		c.Nginx.CacheRoot = "/var/cache/nginx"
 	}
@@ -194,6 +198,12 @@ func (c *Config) Validate() error {
 	// Nginx basics
 	if strings.TrimSpace(c.Nginx.Root) == "" {
 		errs = append(errs, "nginx.root is required (e.g. /opt/nginx)")
+	}
+	if strings.TrimSpace(c.Nginx.Apply.ReloadMode) != "" {
+		mode := strings.ToLower(strings.TrimSpace(c.Nginx.Apply.ReloadMode))
+		if mode != "signal" && mode != "systemd" {
+			errs = append(errs, fmt.Sprintf("nginx.apply.reload_mode=%q unsupported (expected 'signal' or 'systemd')", c.Nginx.Apply.ReloadMode))
+		}
 	}
 
 	// API auth basics

@@ -13,23 +13,39 @@ import (
 )
 
 type Manager struct {
-	Root      string
-	Bin       string
-	MainConf  string
-	SitesDir  string
-	StageDir  string
-	BackupDir string
+	Root        string
+	Bin         string
+	MainConf    string
+	SitesDir    string
+	StageDir    string
+	BackupDir   string
+	ReloadMode  string
+	ServiceName string
 }
 
 func NewManager(root, bin, mainConf, sitesDir, stageDir, backupDir string) *Manager {
 	return &Manager{
-		Root:      root,
-		Bin:       bin,
-		MainConf:  mainConf,
-		SitesDir:  sitesDir,
-		StageDir:  stageDir,
-		BackupDir: backupDir,
+		Root:        root,
+		Bin:         bin,
+		MainConf:    mainConf,
+		SitesDir:    sitesDir,
+		StageDir:    stageDir,
+		BackupDir:   backupDir,
+		ReloadMode:  "signal",
+		ServiceName: "nginx",
 	}
+}
+
+func (m *Manager) SetControlMode(mode, serviceName string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "signal"
+	}
+	m.ReloadMode = mode
+	if strings.TrimSpace(serviceName) == "" {
+		serviceName = "nginx"
+	}
+	m.ServiceName = serviceName
 }
 
 // EnsureLayout creates the required directories for generated configs.
@@ -214,6 +230,50 @@ func (m *Manager) Publish(domain string) (bool, error) {
 }
 
 func (m *Manager) Reload() error {
+	switch m.ReloadMode {
+	case "systemd":
+		return m.reloadSystemd()
+	default:
+		return m.reloadSignal()
+	}
+}
+
+func (m *Manager) Start() error {
+	switch m.ReloadMode {
+	case "systemd":
+		return m.startSystemd()
+	default:
+		return m.startSignal()
+	}
+}
+
+func (m *Manager) ReloadOrStart() error {
+	switch m.ReloadMode {
+	case "systemd":
+		active, err := m.systemdIsActive()
+		if err != nil {
+			return err
+		}
+		if active {
+			return m.reloadSystemd()
+		}
+		fmt.Printf("nginx service %q inactive, attempting start...\n", m.ServiceName)
+		return m.startSystemd()
+	default:
+		if err := m.reloadSignal(); err != nil {
+			if !isReloadRecoverable(err.Error()) {
+				return err
+			}
+			fmt.Println("nginx reload failed; service inactive, attempting start...")
+			if startErr := m.startSignal(); startErr != nil {
+				return fmt.Errorf("nginx start failed after reload fallback: %w", startErr)
+			}
+		}
+		return nil
+	}
+}
+
+func (m *Manager) reloadSignal() error {
 	// Try reload first.
 	res, err := util.Run(10*time.Second, m.Bin, "-s", "reload")
 	if res.Stdout != "" {
@@ -225,34 +285,90 @@ func (m *Manager) Reload() error {
 	if err == nil {
 		return nil
 	}
+	return &CmdOutputError{
+		Cmd:    m.Bin + " -s reload",
+		Stdout: res.Stdout,
+		Stderr: res.Stderr,
+		Err:    err,
+	}
+}
 
-	// Reload can fail when nginx is not running or PID file is stale/invalid.
-	// In that case, start nginx with the configured main config and only fail
-	// if startup also fails.
-	if !isReloadRecoverable(res.Stderr) {
-		return err
+func (m *Manager) startSignal() error {
+	res, err := util.Run(10*time.Second, m.Bin, "-c", m.MainConf)
+	if res.Stdout != "" {
+		fmt.Print(res.Stdout)
 	}
-
-	startRes, startErr := util.Run(10*time.Second, m.Bin, "-c", m.MainConf)
-	if startRes.Stdout != "" {
-		fmt.Print(startRes.Stdout)
+	if res.Stderr != "" {
+		fmt.Print(res.Stderr)
 	}
-	if startRes.Stderr != "" {
-		fmt.Print(startRes.Stderr)
-	}
-	if startErr != nil {
+	if err != nil {
 		return &CmdOutputError{
 			Cmd:    m.Bin + " -c " + m.MainConf,
-			Stdout: startRes.Stdout,
-			Stderr: startRes.Stderr,
-			Err:    startErr,
+			Stdout: res.Stdout,
+			Stderr: res.Stderr,
+			Err:    err,
 		}
 	}
 	return nil
 }
 
-func isReloadRecoverable(stderr string) bool {
-	s := strings.ToLower(stderr)
+func (m *Manager) reloadSystemd() error {
+	res, err := util.Run(10*time.Second, "systemctl", "reload", m.ServiceName)
+	if res.Stdout != "" {
+		fmt.Print(res.Stdout)
+	}
+	if res.Stderr != "" {
+		fmt.Print(res.Stderr)
+	}
+	if err != nil {
+		return &CmdOutputError{
+			Cmd:    "systemctl reload " + m.ServiceName,
+			Stdout: res.Stdout,
+			Stderr: res.Stderr,
+			Err:    fmt.Errorf("systemctl reload %s failed: %w", m.ServiceName, err),
+		}
+	}
+	return nil
+}
+
+func (m *Manager) startSystemd() error {
+	res, err := util.Run(10*time.Second, "systemctl", "start", m.ServiceName)
+	if res.Stdout != "" {
+		fmt.Print(res.Stdout)
+	}
+	if res.Stderr != "" {
+		fmt.Print(res.Stderr)
+	}
+	if err != nil {
+		return &CmdOutputError{
+			Cmd:    "systemctl start " + m.ServiceName,
+			Stdout: res.Stdout,
+			Stderr: res.Stderr,
+			Err:    fmt.Errorf("systemctl start %s failed: %w", m.ServiceName, err),
+		}
+	}
+	return nil
+}
+
+func (m *Manager) systemdIsActive() (bool, error) {
+	res, err := util.Run(10*time.Second, "systemctl", "is-active", m.ServiceName)
+	out := strings.ToLower(strings.TrimSpace(res.Stdout + "\n" + res.Stderr))
+	if err == nil {
+		return strings.Contains(out, "active"), nil
+	}
+	if strings.Contains(out, "inactive") || strings.Contains(out, "failed") || strings.Contains(out, "unknown") {
+		return false, nil
+	}
+	return false, &CmdOutputError{
+		Cmd:    "systemctl is-active " + m.ServiceName,
+		Stdout: res.Stdout,
+		Stderr: res.Stderr,
+		Err:    err,
+	}
+}
+
+func isReloadRecoverable(msg string) bool {
+	s := strings.ToLower(msg)
 	return strings.Contains(s, "invalid pid number") ||
 		(strings.Contains(s, "open()") && strings.Contains(s, "pid")) ||
 		(strings.Contains(s, "pid") && strings.Contains(s, "no such file or directory"))
