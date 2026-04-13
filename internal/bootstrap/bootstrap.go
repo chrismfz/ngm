@@ -14,6 +14,9 @@ func Init(cfg *config.Config, paths config.Paths) error {
 	if err := mgr.EnsureLayout(); err != nil {
 		return fmt.Errorf("ensure nginx layout: %w", err)
 	}
+	if err := EnsureNginxCacheDirs(cfg, paths); err != nil {
+		return fmt.Errorf("ensure nginx cache dirs: %w", err)
+	}
 
 	certPath, keyPath, err := EnsureGlobalSelfSigned(cfg, paths)
 	if err != nil {

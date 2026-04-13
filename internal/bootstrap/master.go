@@ -15,10 +15,14 @@ import (
 var templateFS embed.FS
 
 type masterTemplateData struct {
-	NginxUser        string
-	TLSCert          string
-	TLSKey           string
-	SitesIncludeGlob string
+	NginxUser            string
+	TLSCert              string
+	TLSKey               string
+	SitesIncludeGlob     string
+	CacheRoot            string
+	PHPFastCGICachePath  string
+	ProxyMicroCachePath  string
+	ProxyStaticCachePath string
 }
 
 func RenderMasterConfig(cfg *config.Config, paths config.Paths, certPath, keyPath string) ([]byte, error) {
@@ -28,10 +32,14 @@ func RenderMasterConfig(cfg *config.Config, paths config.Paths, certPath, keyPat
 	}
 
 	data := masterTemplateData{
-		NginxUser:        cfg.Nginx.User,
-		TLSCert:          certPath,
-		TLSKey:           keyPath,
-		SitesIncludeGlob: filepath.Join(paths.NginxSitesDir, "*.conf"),
+		NginxUser:            cfg.Nginx.User,
+		TLSCert:              certPath,
+		TLSKey:               keyPath,
+		SitesIncludeGlob:     filepath.Join(paths.NginxSitesDir, "*.conf"),
+		CacheRoot:            paths.NginxCacheRoot,
+		PHPFastCGICachePath:  paths.NginxPHPFastCGICacheDir,
+		ProxyMicroCachePath:  paths.NginxProxyMicroCacheDir,
+		ProxyStaticCachePath: paths.NginxProxyStaticCacheDir,
 	}
 	var buf bytes.Buffer
 	if err := tpl.Execute(&buf, data); err != nil {

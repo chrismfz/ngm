@@ -25,6 +25,12 @@ http {
     gzip on;
     gzip_static on;
 
+    # Global cache zones used by generated site configs.
+    # Cache root: {{ .CacheRoot }}
+    fastcgi_cache_path {{ .PHPFastCGICachePath }} levels=1:2 keys_zone=php_cache:64m inactive=30m max_size=1g use_temp_path=off;
+    proxy_cache_path   {{ .ProxyMicroCachePath }} levels=1:2 keys_zone=proxy_micro:32m inactive=30m max_size=512m use_temp_path=off;
+    proxy_cache_path   {{ .ProxyStaticCachePath }} levels=1:2 keys_zone=proxy_static:128m inactive=30d max_size=2g use_temp_path=off;
+
     server {
         listen 443 quic reuseport;
         server_name _;

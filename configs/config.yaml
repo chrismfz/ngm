@@ -29,6 +29,8 @@ nginx:
 
   # Path to the nginx binary (relative to root).
   bin: "sbin/nginx"
+  # Root directory for nginx cache data (absolute path).
+  cache_root: "/var/cache/nginx"
   user: "www-data"
   group: "www-data"
 
