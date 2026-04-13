@@ -258,6 +258,8 @@ func printAdminUsage() {
 func printProvisionUsage() {
 	fmt.Println("Usage: ngm provision <init|test>")
 	fmt.Println("Subcommands: init, test")
+	fmt.Println("Notes:")
+	fmt.Println("  init installs the global self-signed fallback cert and does not run certbot.")
 	fmt.Println("Examples:")
 	fmt.Println("  ngm provision init")
 	fmt.Println("  ngm provision test")
