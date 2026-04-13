@@ -108,3 +108,38 @@ storage:
   # SQLite database file (state store).
   # Backward-compatibility alias; if dsn is empty this value is used.
   sqlite_path: "/var/lib/ngm/ngm.db"
+
+dns:
+  enabled: false
+  provider: "bind"
+  default_template: "default"
+  default_ipv4: "203.0.113.10"
+  default_ipv6: ""
+
+  bind:
+    named_conf_include: "/etc/named/ngm-zones.conf"
+    zones_dir: "/var/named/ngm"
+    rndc_bin: "rndc"
+    checkconf_bin: "named-checkconf"
+    checkzone_bin: "named-checkzone"
+    named_conf_path: "/etc/named.conf"
+    zone_file_suffix: ".zone"
+
+  templates:
+    default:
+      ttl: 3600
+      soa:
+        mname: "ns1.example.net."
+        rname: "hostmaster.example.net."
+        refresh: 3600
+        retry: 900
+        expire: 1209600
+        minimum: 3600
+      nameservers:
+        - "ns1.example.net."
+        - "ns2.example.net."
+      records:
+        - name: "www"
+          type: "CNAME"
+          value: "@"
+          ttl: 3600

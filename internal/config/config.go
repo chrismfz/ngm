@@ -19,6 +19,7 @@ type Config struct {
 	Hosting  HostingConfig  `yaml:"hosting"`
 	Security SecurityConfig `yaml:"security"`
 	Storage  StorageConfig  `yaml:"storage"`
+	DNS      DNSConfig      `yaml:"dns"`
 }
 
 type APIConfig struct {
@@ -80,6 +81,49 @@ type StorageConfig struct {
 	Driver     string `yaml:"driver"`
 	DSN        string `yaml:"dsn"`
 	SQLitePath string `yaml:"sqlite_path"`
+}
+
+type DNSConfig struct {
+	Enabled         bool                         `yaml:"enabled"`
+	Provider        string                       `yaml:"provider"`
+	DefaultTemplate string                       `yaml:"default_template"`
+	DefaultIPv4     string                       `yaml:"default_ipv4"`
+	DefaultIPv6     string                       `yaml:"default_ipv6"`
+	Bind            DNSBindConfig                `yaml:"bind"`
+	Templates       map[string]DNSTemplateConfig `yaml:"templates"`
+}
+
+type DNSBindConfig struct {
+	NamedConfInclude string `yaml:"named_conf_include"`
+	ZonesDir         string `yaml:"zones_dir"`
+	RNDCBin          string `yaml:"rndc_bin"`
+	CheckConfBin     string `yaml:"checkconf_bin"`
+	CheckZoneBin     string `yaml:"checkzone_bin"`
+	NamedConfPath    string `yaml:"named_conf_path"`
+	ZoneFileSuffix   string `yaml:"zone_file_suffix"`
+}
+
+type DNSTemplateConfig struct {
+	TTL         uint32              `yaml:"ttl"`
+	SOA         DNSSOAConfig        `yaml:"soa"`
+	Nameservers []string            `yaml:"nameservers"`
+	Records     []DNSRecordTemplate `yaml:"records"`
+}
+
+type DNSSOAConfig struct {
+	MName   string `yaml:"mname"`
+	RName   string `yaml:"rname"`
+	Refresh uint32 `yaml:"refresh"`
+	Retry   uint32 `yaml:"retry"`
+	Expire  uint32 `yaml:"expire"`
+	Minimum uint32 `yaml:"minimum"`
+}
+
+type DNSRecordTemplate struct {
+	Name  string `yaml:"name"`
+	Type  string `yaml:"type"`
+	Value string `yaml:"value"`
+	TTL   uint32 `yaml:"ttl"`
 }
 
 func Load(path string) (*Config, error) {
@@ -189,6 +233,54 @@ func (c *Config) applyDefaults() {
 	if c.Security.AuditLog == "" {
 		c.Security.AuditLog = "/var/log/ngm/audit.log"
 	}
+	// DNS
+	if c.DNS.Provider == "" {
+		c.DNS.Provider = "bind"
+	}
+	if c.DNS.DefaultTemplate == "" {
+		c.DNS.DefaultTemplate = "default"
+	}
+	if c.DNS.Bind.NamedConfInclude == "" {
+		c.DNS.Bind.NamedConfInclude = "/etc/named/ngm-zones.conf"
+	}
+	if c.DNS.Bind.ZonesDir == "" {
+		c.DNS.Bind.ZonesDir = "/var/named/ngm"
+	}
+	if c.DNS.Bind.RNDCBin == "" {
+		c.DNS.Bind.RNDCBin = "rndc"
+	}
+	if c.DNS.Bind.CheckConfBin == "" {
+		c.DNS.Bind.CheckConfBin = "named-checkconf"
+	}
+	if c.DNS.Bind.CheckZoneBin == "" {
+		c.DNS.Bind.CheckZoneBin = "named-checkzone"
+	}
+	if c.DNS.Bind.NamedConfPath == "" {
+		c.DNS.Bind.NamedConfPath = "/etc/named.conf"
+	}
+	if c.DNS.Bind.ZoneFileSuffix == "" {
+		c.DNS.Bind.ZoneFileSuffix = ".zone"
+	}
+	if c.DNS.Templates == nil {
+		c.DNS.Templates = map[string]DNSTemplateConfig{}
+	}
+	if _, ok := c.DNS.Templates[c.DNS.DefaultTemplate]; !ok {
+		c.DNS.Templates[c.DNS.DefaultTemplate] = DNSTemplateConfig{
+			TTL: 3600,
+			SOA: DNSSOAConfig{
+				MName:   "ns1.example.net.",
+				RName:   "hostmaster.example.net.",
+				Refresh: 3600,
+				Retry:   900,
+				Expire:  1209600,
+				Minimum: 3600,
+			},
+			Nameservers: []string{"ns1.example.net.", "ns2.example.net."},
+			Records: []DNSRecordTemplate{
+				{Name: "www", Type: "CNAME", Value: "@", TTL: 3600},
+			},
+		}
+	}
 }
 
 // validate
@@ -253,6 +345,20 @@ func (c *Config) Validate() error {
 		}
 		if strings.TrimSpace(v.SockDir) == "" {
 			errs = append(errs, fmt.Sprintf("phpfpm.versions[%q].sock_dir is required", ver))
+		}
+	}
+	if c.DNS.Enabled {
+		if strings.TrimSpace(c.DNS.DefaultTemplate) == "" {
+			errs = append(errs, "dns.default_template is required when dns.enabled=true")
+		}
+		if _, ok := c.DNS.Templates[c.DNS.DefaultTemplate]; !ok {
+			errs = append(errs, fmt.Sprintf("dns.default_template=%q not found in dns.templates", c.DNS.DefaultTemplate))
+		}
+		if strings.TrimSpace(c.DNS.Bind.NamedConfInclude) == "" {
+			errs = append(errs, "dns.bind.named_conf_include is required when dns.enabled=true")
+		}
+		if strings.TrimSpace(c.DNS.Bind.ZonesDir) == "" {
+			errs = append(errs, "dns.bind.zones_dir is required when dns.enabled=true")
 		}
 	}
 
