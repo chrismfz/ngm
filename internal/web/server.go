@@ -67,6 +67,12 @@ func New(cfg *config.Config, paths config.Paths, st store.SiteStore) (*Server, e
 	template.Must(tpl.New("resellers").Parse(resellersHTML))
 	template.Must(tpl.New("reseller_form").Parse(resellerFormHTML))
 	template.Must(tpl.New("dns").Parse(dnsHTML))
+	template.Must(tpl.New("sites_table").Parse(sitesTableHTML))
+	template.Must(tpl.New("users_table").Parse(usersTableHTML))
+	template.Must(tpl.New("resellers_table").Parse(resellersTableHTML))
+	template.Must(tpl.New("proxy_targets_table").Parse(proxyTargetsTableHTML))
+	template.Must(tpl.New("apply_result_fragment").Parse(applyResultFragmentHTML))
+	template.Must(tpl.New("cert_action_result").Parse(certActionResultHTML))
 
 	return &Server{
 		cfg:      cfg,
@@ -80,6 +86,7 @@ func New(cfg *config.Config, paths config.Paths, st store.SiteStore) (*Server, e
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("/static/", staticHandler())
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/dashboard", http.StatusFound)
@@ -254,6 +261,17 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, title, page stri
 	_ = s.tpl.ExecuteTemplate(w, "layout", data)
 }
 
+func (s *Server) renderTemplate(w http.ResponseWriter, name string, data map[string]any) {
+	if data == nil {
+		data = map[string]any{}
+	}
+	_ = s.tpl.ExecuteTemplate(w, name, data)
+}
+
+func isHX(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("HX-Request")), "true")
+}
+
 // ---------------- auth ----------------
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -329,11 +347,23 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // ---------------- sites ----------------
 
 func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
-	sess, _ := s.sessionFromCtx(r)
-	items, err := s.core.SiteList(r.Context())
+	filtered, owners, certs, err := s.siteListData(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	s.render(w, r, "Sites", "sites", map[string]any{
+		"Items":  filtered,
+		"Owners": owners,
+		"Certs":  certs,
+	})
+}
+
+func (s *Server) siteListData(r *http.Request) ([]app.SiteListItem, map[string]string, map[string]any, error) {
+	sess, _ := s.sessionFromCtx(r)
+	items, err := s.core.SiteList(r.Context())
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	// Optional enrich for UI: owner username + cert info
 	owners := map[string]string{}
@@ -360,11 +390,7 @@ func (s *Server) handleSites(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, it)
 	}
 
-	s.render(w, r, "Sites", "sites", map[string]any{
-		"Items":  filtered,
-		"Owners": owners,
-		"Certs":  certs,
-	})
+	return filtered, owners, certs, nil
 }
 
 func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
@@ -757,6 +783,15 @@ func (s *Server) handleSiteDisable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if isHX(r) {
+		items, owners, certs, err := s.siteListData(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "sites_table", map[string]any{"Items": items, "Owners": owners, "Certs": certs})
+		return
+	}
 	http.Redirect(w, r, "/ui/sites", http.StatusFound)
 }
 
@@ -776,6 +811,15 @@ func (s *Server) handleSiteEnable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if isHX(r) {
+		items, owners, certs, err := s.siteListData(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "sites_table", map[string]any{"Items": items, "Owners": owners, "Certs": certs})
+		return
+	}
 	http.Redirect(w, r, "/ui/sites", http.StatusFound)
 }
 
@@ -793,6 +837,15 @@ func (s *Server) handleSiteDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.core.SiteDelete(r.Context(), domain); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if isHX(r) {
+		items, owners, certs, err := s.siteListData(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "sites_table", map[string]any{"Items": items, "Owners": owners, "Certs": certs})
 		return
 	}
 	http.Redirect(w, r, "/ui/sites", http.StatusFound)
@@ -832,10 +885,7 @@ func (s *Server) handleProxyTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, r, "Proxy Targets", "proxy_targets", map[string]any{
-		"Site":    site,
-		"Targets": targets,
-	})
+	s.render(w, r, "Proxy Targets", "proxy_targets", map[string]any{"Site": site, "Targets": targets})
 }
 
 func (s *Server) handleProxyTargetAdd(w http.ResponseWriter, r *http.Request) {
@@ -869,6 +919,11 @@ func (s *Server) handleProxyTargetAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if isHX(r) {
+		targets, _ := s.st.ListProxyTargetsBySiteID(site.ID)
+		s.renderTemplate(w, "proxy_targets_table", map[string]any{"Site": site, "Targets": targets})
+		return
+	}
 	http.Redirect(w, r, "/ui/sites/targets?domain="+url.QueryEscape(domain), http.StatusFound)
 }
 
@@ -893,6 +948,11 @@ func (s *Server) handleProxyTargetDel(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.st.DisableProxyTarget(site.ID, target); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if isHX(r) {
+		targets, _ := s.st.ListProxyTargetsBySiteID(site.ID)
+		s.renderTemplate(w, "proxy_targets_table", map[string]any{"Site": site, "Targets": targets})
 		return
 	}
 	http.Redirect(w, r, "/ui/sites/targets?domain="+url.QueryEscape(domain), http.StatusFound)
@@ -932,6 +992,13 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 			Limit:  limit,
 		})
 		if err != nil {
+			if isHX(r) {
+				s.renderTemplate(w, "apply_result_fragment", map[string]any{
+					"Result": res,
+					"Error":  err.Error(),
+				})
+				return
+			}
 			s.render(w, r, "Apply Result", "apply_result", map[string]any{
 				"Result": res,
 				"Error":  err.Error(),
@@ -939,6 +1006,12 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if isHX(r) {
+			s.renderTemplate(w, "apply_result_fragment", map[string]any{
+				"Result": res,
+			})
+			return
+		}
 		s.render(w, r, "Apply Result", "apply_result", map[string]any{
 			"Result": res,
 		})
@@ -1020,6 +1093,10 @@ func (s *Server) handleCertIssue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if isHX(r) {
+		s.renderTemplate(w, "cert_action_result", map[string]any{"Kind": "issue", "Domain": d, "Message": "Certificate issued/renewed."})
+		return
+	}
 	http.Redirect(w, r, "/ui/certs", http.StatusFound)
 }
 
@@ -1045,6 +1122,14 @@ func (s *Server) handleCertRenew(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.core.CertRenew(ctx, d, all, true); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if isHX(r) {
+		msg := "Renew completed."
+		if all {
+			msg = "Renew all completed."
+		}
+		s.renderTemplate(w, "cert_action_result", map[string]any{"Kind": "renew", "Domain": d, "Message": msg})
 		return
 	}
 	http.Redirect(w, r, "/ui/certs", http.StatusFound)
@@ -1198,10 +1283,22 @@ func (s *Server) handlePackageDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
-	items, err := s.st.ListPanelUsers()
+	filtered, err := s.usersViewData(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	s.render(w, r, "Users", "users", map[string]any{
+		"Items": filtered,
+		"Error": strings.TrimSpace(r.URL.Query().Get("error")),
+		"Info":  strings.TrimSpace(r.URL.Query().Get("info")),
+	})
+}
+
+func (s *Server) usersViewData(r *http.Request) ([]map[string]any, error) {
+	items, err := s.st.ListPanelUsers()
+	if err != nil {
+		return nil, err
 	}
 	sess, _ := s.sessionFromCtx(r)
 	pkgByUser, _ := s.userPackageMap()
@@ -1231,11 +1328,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			"Owner":       owner,
 		})
 	}
-	s.render(w, r, "Users", "users", map[string]any{
-		"Items": filtered,
-		"Error": strings.TrimSpace(r.URL.Query().Get("error")),
-		"Info":  strings.TrimSpace(r.URL.Query().Get("info")),
-	})
+	return filtered, nil
 }
 
 func (s *Server) handleUserNew(w http.ResponseWriter, r *http.Request) {
@@ -1406,6 +1499,15 @@ func (s *Server) handleUserSuspend(w http.ResponseWriter, r *http.Request) {
 		sysUser = target.Username
 	}
 	_ = users.SuspendSystemUser(sysUser)
+	if isHX(r) {
+		items, err := s.usersViewData(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "users_table", map[string]any{"Items": items})
+		return
+	}
 	http.Redirect(w, r, "/ui/users", http.StatusFound)
 }
 
@@ -1432,6 +1534,15 @@ func (s *Server) handleUserEnable(w http.ResponseWriter, r *http.Request) {
 		sysUser = target.Username
 	}
 	_ = users.UnsuspendSystemUser(sysUser)
+	if isHX(r) {
+		items, err := s.usersViewData(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "users_table", map[string]any{"Items": items})
+		return
+	}
 	http.Redirect(w, r, "/ui/users", http.StatusFound)
 }
 func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
@@ -1457,13 +1568,35 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		sysUser = target.Username
 	}
 	_ = users.DeleteSystemUser(sysUser)
+	if isHX(r) {
+		items, err := s.usersViewData(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "users_table", map[string]any{"Items": items})
+		return
+	}
 	http.Redirect(w, r, "/ui/users", http.StatusFound)
 }
 func (s *Server) handleResellers(w http.ResponseWriter, r *http.Request) {
-	allUsers, err := s.st.ListPanelUsers()
+	items, userCounts, err := s.resellersViewData()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	s.render(w, r, "Resellers", "resellers", map[string]any{
+		"Items":     items,
+		"UserCount": userCounts,
+		"Error":     strings.TrimSpace(r.URL.Query().Get("error")),
+		"Info":      strings.TrimSpace(r.URL.Query().Get("info")),
+	})
+}
+
+func (s *Server) resellersViewData() ([]store.PanelUser, map[int64]int, error) {
+	allUsers, err := s.st.ListPanelUsers()
+	if err != nil {
+		return nil, nil, err
 	}
 	userCounts := map[int64]int{}
 	var items []store.PanelUser
@@ -1475,12 +1608,7 @@ func (s *Server) handleResellers(w http.ResponseWriter, r *http.Request) {
 			items = append(items, u)
 		}
 	}
-	s.render(w, r, "Resellers", "resellers", map[string]any{
-		"Items":     items,
-		"UserCount": userCounts,
-		"Error":     strings.TrimSpace(r.URL.Query().Get("error")),
-		"Info":      strings.TrimSpace(r.URL.Query().Get("info")),
-	})
+	return items, userCounts, nil
 }
 func (s *Server) handleResellerNew(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
@@ -1599,6 +1727,15 @@ func (s *Server) handleResellerDelete(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/resellers?error="+url.QueryEscape(err.Error()), http.StatusFound)
 		return
 	}
+	if isHX(r) {
+		items, userCount, err := s.resellersViewData()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "resellers_table", map[string]any{"Items": items, "UserCount": userCount})
+		return
+	}
 	http.Redirect(w, r, "/ui/resellers?info="+url.QueryEscape("reseller deleted"), http.StatusFound)
 }
 
@@ -1617,6 +1754,15 @@ func (s *Server) setResellerEnabled(w http.ResponseWriter, r *http.Request, enab
 	target.Enabled = enabled
 	if _, err := s.st.UpdatePanelUser(target); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if isHX(r) {
+		items, userCount, err := s.resellersViewData()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.renderTemplate(w, "resellers_table", map[string]any{"Items": items, "UserCount": userCount})
 		return
 	}
 	http.Redirect(w, r, "/ui/resellers", http.StatusFound)
@@ -1816,12 +1962,25 @@ const layoutHTML = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/panel.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
 </head>
-<body style="font-family:system-ui; margin:24px;">
-  {{if .Authed}}{{template "menu" .}}{{end}}
-  <div style="max-width:1100px;">
+<body>
+  <div class="container">
+  {{if .Authed}}
+    <div class="shell">
+      {{template "menu" .}}
+      <main class="main">
+        <div class="topbar"><strong>{{.Title}}</strong><span class="muted">{{.Session.Username}}</span></div>
+        {{template "content" .}}
+      </main>
+    </div>
+  {{else}}
     {{template "content" .}}
+  {{end}}
   </div>
 </body>
 </html>`
@@ -1866,56 +2025,20 @@ const contentHTML = `{{define "content"}}
 {{end}}`
 
 const menuHTML = `{{define "menu"}}
-  <div style="display:flex; gap:12px; align-items:center; margin-bottom:18px;">
-    <div style="font-weight:700;">NGM</div>
-    <a href="/ui/dashboard">Dashboard</a>
-    {{if eq .Session.Role "admin"}}
-      <a href="/ui/resellers">Resellers</a>
-      <a href="/ui/users">Users</a>
-      <a href="/ui/packages">Packages</a>
-      <a href="/ui/sites">Sites</a>
-      <a href="/ui/dns">DNS</a>
-      <a href="/ui/certs">Certificates</a>
-      <a href="/ui/apply">Apply</a>
-      <a href="/ui/backup">Backups</a>
-    {{else if eq .Session.Role "reseller"}}
-      <a href="/ui/users">My Users</a>
-      <a href="/ui/packages">Packages</a>
-      <a href="/ui/sites">Sites</a>
-      <a href="/ui/dns">DNS</a>
-      <a href="/ui/certs">Certificates</a>
-      <a href="/ui/backup">Backups</a>
-    {{else}}
-      <a href="/ui/sites">My Domains</a>
-      <a href="/ui/dns">DNS</a>
-      <a href="/ui/certs">Certificates</a>
-      <a href="/ui/backup">Backup</a>
-    {{end}}
-
-    <div style="margin-left:auto; display:flex; gap:10px; align-items:center;">
-      <div style="opacity:.75;">{{.Session.Username}}</div>
-      <a href="/ui/logout">Logout</a>
-    </div>
-  </div>
+<aside class="nav"><div class="brand">NGM</div><nav class="menu"><a href="/ui/dashboard">Dashboard</a>{{if eq .Session.Role "admin"}}<a href="/ui/resellers">Resellers</a><a href="/ui/users">Users</a><a href="/ui/packages">Packages</a><a href="/ui/sites">Sites</a><a href="/ui/dns">DNS</a><a href="/ui/certs">Certificates</a><a href="/ui/apply">Apply</a><a href="/ui/backup">Backups</a>{{else if eq .Session.Role "reseller"}}<a href="/ui/users">My Users</a><a href="/ui/packages">Packages</a><a href="/ui/sites">Sites</a><a href="/ui/dns">DNS</a><a href="/ui/certs">Certificates</a><a href="/ui/backup">Backups</a>{{else}}<a href="/ui/sites">My Domains</a><a href="/ui/dns">DNS</a><a href="/ui/certs">Certificates</a><a href="/ui/backup">Backup</a>{{end}}<a href="/ui/logout">Logout</a></nav></aside>
 {{end}}`
 
-const loginHTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>NGM Login</title></head>
-<body style="font-family:system-ui; max-width:520px; margin:40px auto;">
+const loginHTML = `{{define "login"}}
+<div class="card stack" style="max-width:520px;margin:4rem auto;">
   <h2>NGM Panel Login</h2>
-  {{if .Error}}<p style="color:#b00;">{{.Error}}</p>{{end}}
-  <form method="post" action="/ui/login">
-    <div style="margin:10px 0;">
-      <label>Username</label><br/>
-      <input name="username" style="width:100%; padding:8px;" />
-    </div>
-    <div style="margin:10px 0;">
-      <label>Password</label><br/>
-      <input type="password" name="password" style="width:100%; padding:8px;" />
-    </div>
-    <button style="padding:10px 14px;">Login</button>
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+  <form method="post" action="/ui/login" class="stack">
+    <div><label>Username</label><input class="input" name="username" /></div>
+    <div><label>Password</label><input class="input" type="password" name="password" /></div>
+    <button class="btn btn-primary">Login</button>
   </form>
-</body></html>`
+</div>
+{{end}}`
 
 const dashboardHTML = `{{define "dashboard"}}
 <h2>Dashboard</h2>
@@ -1948,29 +2071,7 @@ const packageFormHTML = `{{define "package_form"}}
 </form>{{end}}`
 
 const usersHTML = `{{define "users"}}
-<h2>Users</h2>
-{{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
-{{if .Info}}<p style="color:#060">{{.Info}}</p>{{end}}
-<p><a href="/ui/users/new">New user</a></p>
-<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>ID</th><th>Username</th><th>Enabled</th><th>Package</th><th>Owner</th><th>Actions</th></tr>
-{{range .Items}}<tr>
-<td>{{.User.ID}}</td>
-<td>{{.User.Username}}</td>
-<td>{{if .User.Enabled}}yes{{else}}no{{end}}</td>
-<td>{{if .PackageName}}{{.PackageName}}{{else}}-{{end}}</td>
-<td>{{.Owner}}</td>
-<td>
-  <a href="/ui/users/edit?username={{.User.Username}}">Edit</a>
-  {{if .User.Enabled}}
-  <form method="post" action="/ui/users/suspend" style="display:inline"><input type="hidden" name="username" value="{{.User.Username}}"><button>Suspend</button></form>
-  {{else}}
-  <form method="post" action="/ui/users/enable" style="display:inline"><input type="hidden" name="username" value="{{.User.Username}}"><button>Enable</button></form>
-  {{end}}
-  <form method="post" action="/ui/users/delete" style="display:inline" onsubmit="return confirm('Delete user {{.User.Username}}?');"><input type="hidden" name="username" value="{{.User.Username}}"><button>Delete</button></form>
-</td>
-</tr>{{end}}
-</table>{{end}}`
+<div class="card stack"><h2>Users</h2>{{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}{{if .Info}}<div class="alert alert-success">{{.Info}}</div>{{end}}<p><a href="/ui/users/new">New user</a></p><div id="users-table-wrapper">{{template "users_table" .}}</div></div>{{end}}`
 
 const userFormHTML = `{{define "user_form"}}
 <h2>{{if eq .Mode "edit"}}Edit user{{else}}New user{{end}}</h2>
@@ -1988,24 +2089,7 @@ const userFormHTML = `{{define "user_form"}}
 </form>{{end}}`
 
 const resellersHTML = `{{define "resellers"}}
-<h2>Resellers</h2>
-{{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
-{{if .Info}}<p style="color:#060">{{.Info}}</p>{{end}}
-<p><a href="/ui/resellers/new">New reseller</a></p>
-<table border="1" cellpadding="6" cellspacing="0">
-<tr><th>ID</th><th>Username</th><th>Enabled</th><th>Owned users</th><th>Actions</th></tr>
-{{range .Items}}<tr>
-<td>{{.ID}}</td><td>{{.Username}}</td><td>{{if .Enabled}}yes{{else}}no{{end}}</td><td>{{index $.UserCount .ID}}</td>
-<td>
-<a href="/ui/resellers/edit?username={{.Username}}">Edit</a>
-{{if .Enabled}}
-<form method="post" action="/ui/resellers/disable" style="display:inline"><input type="hidden" name="username" value="{{.Username}}"><button>Disable</button></form>
-{{else}}
-<form method="post" action="/ui/resellers/enable" style="display:inline"><input type="hidden" name="username" value="{{.Username}}"><button>Enable</button></form>
-{{end}}
-<form method="post" action="/ui/resellers/delete" style="display:inline" onsubmit="return confirm('Delete reseller {{.Username}}? This is blocked if owned users exist.');"><input type="hidden" name="username" value="{{.Username}}"><button>Delete</button></form>
-</td></tr>{{end}}
-</table>{{end}}`
+<div class="card stack"><h2>Resellers</h2>{{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}{{if .Info}}<div class="alert alert-success">{{.Info}}</div>{{end}}<p><a href="/ui/resellers/new">New reseller</a></p><div id="resellers-table-wrapper">{{template "resellers_table" .}}</div></div>{{end}}`
 const resellerFormHTML = `{{define "reseller_form"}}
 <h2>{{if eq .Mode "edit"}}Edit reseller{{else}}New reseller{{end}}</h2>
 {{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
@@ -2020,83 +2104,7 @@ const resellerFormHTML = `{{define "reseller_form"}}
 </form>{{end}}`
 
 const sitesHTML = `{{define "sites"}}
-  <h2 style="margin:0 0 10px 0;">Sites</h2>
-  <p style="opacity:.8; margin-top:0;">Manage sites and apply nginx changes.</p>
-  <p><a href="/ui/sites/new">New site</a></p>
-
-  <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%;">
-    <thead>
-      <tr>
-        <th align="left">Domain</th>
-        <th align="left">Parent</th>
-        <th align="center">Type</th>
-        <th>Owner</th>
-        <th>Mode</th>
-        <th>Enabled</th>
-        <th>DNS</th>
-        <th>TLS</th>
-        <th>State</th>
-        <th>Last Applied</th>
-        <th>PHP</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-    {{range .Items}}
-      <tr>
-        <td>{{.Site.Domain}}</td>
-        <td>{{if .Site.ParentDomain}}{{.Site.ParentDomain}}{{else}}-{{end}}</td>
-        <td align="center">{{if .Site.ParentDomain}}subdomain{{else}}root{{end}}</td>
-        <td align="center">{{index $.Owners .Site.Domain}}</td>
-        <td align="center">{{.Site.Mode}}</td>
-        <td align="center">{{if .Site.Enabled}}yes{{else}}no{{end}}</td>
-        <td align="center">{{.DNSStatus}}</td>
-        <td align="center">
-          {{ $ci := index $.Certs .Site.Domain }}
-          {{ if $ci }}
-            yes ({{ $ci.DaysLeft }}d)
-          {{ else }}
-            no
-          {{ end }}
-        </td>
-        <td align="center">{{.State}}</td>
-        <td align="center">{{.Last}}</td>
-        <td align="center">{{.Site.PHPVersion}}</td>
-        <td align="center" style="white-space:nowrap;">
-          <form method="post" action="/ui/apply" style="display:inline;">
-            <input type="hidden" name="domain" value="{{.Site.Domain}}">
-            <button>Apply</button>
-          </form>
-          {{if eq .Site.Mode "proxy"}}
-            <a href="/ui/sites/targets?domain={{.Site.Domain}}" style="margin-left:8px;">Targets</a>
-          {{end}}
-          <a href="/ui/sites/edit?domain={{.Site.Domain}}" style="margin-left:8px;">Edit</a>
-
-{{if .Site.Enabled}}
-            <form method="post" action="/ui/sites/disable" style="display:inline; margin-left:8px;"
-                  onsubmit="return confirm('Disable {{.Site.Domain}} ?');">
-              <input type="hidden" name="domain" value="{{.Site.Domain}}">
-              <button>Disable</button>
-            </form>
-          {{else}}
-            <form method="post" action="/ui/sites/enable" style="display:inline; margin-left:8px;"
-                  onsubmit="return confirm('Enable {{.Site.Domain}} ?');">
-              <input type="hidden" name="domain" value="{{.Site.Domain}}">
-              <button>Enable</button>
-            </form>
-            <form method="post" action="/ui/sites/delete" style="display:inline; margin-left:8px;"
-                  onsubmit="return confirm('DELETE {{.Site.Domain}} permanently? This cannot be undone.');">
-              <input type="hidden" name="domain" value="{{.Site.Domain}}">
-              <button>Delete</button>
-            </form>
-          {{end}}
-
-        </td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-{{end}}`
+<div class="card stack"><h2>Sites</h2><p class="muted">Manage sites and apply nginx changes.</p><p><a href="/ui/sites/new">New site</a></p><div id="sites-table-wrapper">{{template "sites_table" .}}</div><div id="apply-result"></div></div>{{end}}`
 
 const dnsHTML = `{{define "dns"}}
 <h2>DNS</h2>
@@ -2130,316 +2138,25 @@ const dnsHTML = `{{define "dns"}}
 {{end}}`
 
 const siteFormHTML = `{{define "site_form"}}
-  {{if eq .Mode "new"}}<h2>Add Site</h2>{{end}}
-  {{if eq .Mode "edit"}}<h2>Edit Site</h2>{{end}}
-  {{if eq .Mode "result"}}<h2>Result</h2>{{end}}
-
-  {{if .Error}}<p style="color:#b00;">{{.Error}}</p>{{end}}
-  {{if .Warnings}}
-    <div style="border:1px solid #cc0; padding:10px; margin:10px 0;">
-      <div style="font-weight:700;">Warnings</div>
-      <ul>
-        {{range .Warnings}}<li>{{.}}</li>{{end}}
-      </ul>
-    </div>
-  {{end}}
-
-  {{if eq .Mode "result"}}
-    <pre style="background:#f6f6f6; padding:12px; overflow:auto;">{{printf "%+v" .Site}}</pre>
-    <p><a href="/ui/sites">Back to Sites</a></p>
-  {{else}}
-    <form method="post" action="{{if eq .Mode "new"}}/ui/sites/new{{else}}/ui/sites/edit{{end}}">
-      <div style="display:grid; grid-template-columns: 180px 1fr; gap:10px; max-width:820px;">
-        <label>Domain</label>
-        <input name="domain" value="{{index .Form "domain"}}" style="padding:8px;" {{if eq .Mode "edit"}}readonly{{end}}>
-
-        <label>Parent Domain</label>
-        <input name="parent" value="{{index .Form "parent"}}" style="padding:8px;" placeholder="optional root domain (e.g. example.com)">
-
-        <label>User (owner)</label>
-        <input name="user" value="{{index .Form "user"}}" style="padding:8px;" placeholder="e.g. chris">
-
-        <label>Mode</label>
-        <select name="mode" style="padding:8px;">
-          <option value="php" {{if eq (index .Form "mode") "php"}}selected{{end}}>php</option>
-          <option value="proxy" {{if eq (index .Form "mode") "proxy"}}selected{{end}}>proxy</option>
-          <option value="static" {{if eq (index .Form "mode") "static"}}selected{{end}}>static</option>
-        </select>
-
-        <label>PHP Version</label>
-        <input name="php" value="{{index .Form "php"}}" style="padding:8px;" placeholder="e.g. 8.4">
-
-        <label>Webroot</label>
-        <input name="webroot" value="{{index .Form "webroot"}}" style="padding:8px;" placeholder="optional">
-
-        <label>Client Max Body Size</label>
-        <input name="clientmax" value="{{index .Form "clientmax"}}" style="padding:8px;"
-               placeholder="leave blank = default (e.g. 32M). Example: 128M">
-
-        <label>PHP Read Timeout</label>
-        <input name="phpread" value="{{index .Form "phpread"}}" style="padding:8px;"
-               placeholder="php mode only. leave blank = default (e.g. 60s). Example: 300s">
-
-        <label>PHP Send Timeout</label>
-        <input name="phpsend" value="{{index .Form "phpsend"}}" style="padding:8px;"
-               placeholder="php mode only. leave blank = default (e.g. 60s). Example: 300s">
-
-        <label>PHP ini overrides (one per line)</label>
-        <textarea name="phpini" style="padding:8px; min-height:140px;"
-          placeholder="max_execution_time = 600&#10;memory_limit = 1024M&#10;upload_max_filesize = 1024M&#10;&#10;# optional: value:KEY = ... for php_value&#10;value:session.gc_maxlifetime = 1440">{{index .Form "phpini"}}</textarea>
-        <div style="grid-column: 1 / span 2; opacity:.75; font-size:13px;">
-          Stored as <code>php/php.ini</code> inside the site folder (not in SQLite). Leave empty to clear.
-        </div>
-
-        <label>HTTP/3</label>
-        <select name="http3" style="padding:8px;">
-          <option value="true" {{if eq (index .Form "http3") "true"}}selected{{end}}>true</option>
-          <option value="false" {{if eq (index .Form "http3") "false"}}selected{{end}}>false</option>
-        </select>
-
-        {{if eq .Mode "new"}}
-          <label>Proxy Targets (one per line)</label>
-          <textarea name="targets" style="padding:8px; min-height:90px;"
-            placeholder="127.0.0.1:8080&#10;10.0.0.2:8080 50 (optional weight)">{{index .Form "targets"}}</textarea>
-
-          <div style="grid-column: 1 / span 2; opacity:.75; font-size:13px;">
-            Used only when Mode=proxy. If empty, create site first, then add targets from the Targets page.
-          </div>
-
-          <label>Provision</label>
-          <select name="provision" style="padding:8px;">
-            <option value="true" {{if eq (index .Form "provision") "true"}}selected{{end}}>true</option>
-            <option value="false" {{if eq (index .Form "provision") "false"}}selected{{end}}>false</option>
-          </select>
-
-          <label>Apply Now</label>
-          <select name="applynow" style="padding:8px;">
-            <option value="true" {{if eq (index .Form "applynow") "true"}}selected{{end}}>true</option>
-            <option value="false" {{if eq (index .Form "applynow") "false"}}selected{{end}}>false</option>
-          </select>
-
-          <label>Skip Cert</label>
-          <select name="skipcert" style="padding:8px;">
-            <option value="false" {{if eq (index .Form "skipcert") "false"}}selected{{end}}>false</option>
-            <option value="true" {{if eq (index .Form "skipcert") "true"}}selected{{end}}>true</option>
-          </select>
-        {{else}}
-          <label>Enabled</label>
-          <select name="enabled" style="padding:8px;">
-            <option value="true" {{if eq (index .Form "enabled") "true"}}selected{{end}}>true</option>
-            <option value="false" {{if eq (index .Form "enabled") "false"}}selected{{end}}>false</option>
-          </select>
-
-          <label>Apply Now</label>
-          <select name="applynow" style="padding:8px;">
-            <option value="true" {{if eq (index .Form "applynow") "true"}}selected{{end}}>true</option>
-            <option value="false" {{if eq (index .Form "applynow") "false"}}selected{{end}}>false</option>
-          </select>
-        {{end}}
-      </div>
-
-      <div style="margin-top:14px;">
-        <button style="padding:10px 14px;">Save</button>
-        <a href="/ui/sites" style="margin-left:10px;">Cancel</a>
-      </div>
-    </form>
-  {{end}}
-{{end}}`
+<div class="card stack" x-data="{mode:'{{index .Form "mode"}}',advanced:false}">{{if eq .Mode "new"}}<h2>Add Site</h2>{{end}}{{if eq .Mode "edit"}}<h2>Edit Site</h2>{{end}}{{if eq .Mode "result"}}<h2>Result</h2>{{end}}{{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}{{if eq .Mode "result"}}<pre class="mono">{{printf "%+v" .Site}}</pre>{{else}}<form method="post" action="{{if eq .Mode "new"}}/ui/sites/new{{else}}/ui/sites/edit{{end}}" class="stack"><div class="form-grid"><label>Domain</label><input class="input" name="domain" value="{{index .Form "domain"}}" {{if eq .Mode "edit"}}readonly{{end}}><label>Parent Domain</label><input class="input" name="parent" value="{{index .Form "parent"}}"><label>User (owner)</label><input class="input" name="user" value="{{index .Form "user"}}"><label>Mode</label><select class="input" x-model="mode" name="mode"><option value="php" {{if eq (index .Form "mode") "php"}}selected{{end}}>php</option><option value="proxy" {{if eq (index .Form "mode") "proxy"}}selected{{end}}>proxy</option><option value="static" {{if eq (index .Form "mode") "static"}}selected{{end}}>static</option></select><label>PHP Version</label><input class="input" name="php" value="{{index .Form "php"}}"><label>Webroot</label><input class="input" name="webroot" value="{{index .Form "webroot"}}"><div style="grid-column:1 / span 2"><button type="button" class="btn" @click="advanced=!advanced">Toggle advanced options</button></div></div><div x-show="advanced" class="form-grid"><label>Client Max Body Size</label><input class="input" name="clientmax" value="{{index .Form "clientmax"}}"><label>PHP Read Timeout</label><input class="input" name="phpread" value="{{index .Form "phpread"}}"><label>PHP Send Timeout</label><input class="input" name="phpsend" value="{{index .Form "phpsend"}}"><label>PHP ini overrides</label><textarea class="input" name="phpini">{{index .Form "phpini"}}</textarea></div><div class="actions"><button class="btn btn-primary">Save</button><a href="/ui/sites">Cancel</a></div></form>{{end}}</div>{{end}}`
 
 const proxyTargetsHTML = `{{define "proxy_targets"}}
-  <h2>Proxy Targets: {{.Site.Domain}}</h2>
-  <p style="opacity:.8; margin-top:0;">
-    Manage upstream targets for this proxy site.
-  </p>
-
-  <div style="margin:10px 0; display:flex; gap:10px; align-items:center;">
-    <form method="post" action="/ui/apply" style="display:inline;">
-      <input type="hidden" name="domain" value="{{.Site.Domain}}">
-      <button style="padding:8px 10px;">Apply</button>
-    </form>
-    <a href="/ui/sites">Back to Sites</a>
-  </div>
-
-  <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%; max-width:900px;">
-    <thead>
-      <tr>
-        <th align="left">Target</th>
-        <th>Weight</th>
-        <th>Backup</th>
-        <th>Enabled</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-    {{range .Targets}}
-      <tr>
-        <td>{{.Addr}}</td>
-        <td align="center">{{.Weight}}</td>
-        <td align="center">{{if .Backup}}yes{{else}}no{{end}}</td>
-        <td align="center">{{if .Enabled}}yes{{else}}no{{end}}</td>
-        <td align="center">
-          <form method="post" action="/ui/sites/targets/del" style="display:inline;"
-                onsubmit="return confirm('Disable target {{.Addr}} ?');">
-            <input type="hidden" name="domain" value="{{$.Site.Domain}}">
-            <input type="hidden" name="target" value="{{.Addr}}">
-            <button>Disable</button>
-          </form>
-        </td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-
-  <h3 style="margin-top:18px;">Add / Update target</h3>
-  <form method="post" action="/ui/sites/targets/add" style="max-width:900px;">
-    <input type="hidden" name="domain" value="{{.Site.Domain}}">
-    <div style="display:grid; grid-template-columns: 180px 1fr; gap:10px;">
-      <label>Target</label>
-      <input name="target" style="padding:8px;" placeholder="127.0.0.1:8080 or unix:/run/app.sock">
-
-      <label>Weight</label>
-      <input name="weight" style="padding:8px;" value="100">
-
-      <label>Backup</label>
-      <select name="backup" style="padding:8px;">
-        <option value="false" selected>false</option>
-        <option value="true">true</option>
-      </select>
-
-      <label>Enabled</label>
-      <select name="enabled" style="padding:8px;">
-        <option value="true" selected>true</option>
-        <option value="false">false</option>
-      </select>
-    </div>
-    <div style="margin-top:12px;">
-      <button style="padding:10px 14px;">Save Target</button>
-    </div>
-  </form>
-{{end}}`
+<div class="card stack"><h2>Proxy Targets: {{.Site.Domain}}</h2><div class="actions"><form method="post" action="/ui/apply" hx-post="/ui/apply" hx-target="#apply-result" hx-swap="innerHTML"><input type="hidden" name="domain" value="{{.Site.Domain}}"><button class="btn">Apply</button></form><a href="/ui/sites">Back to Sites</a></div><div id="proxy-targets-table">{{template "proxy_targets_table" .}}</div><h3>Add / Update target</h3><form method="post" action="/ui/sites/targets/add" hx-post="/ui/sites/targets/add" hx-target="#proxy-targets-table" hx-swap="innerHTML" class="form-grid"><input type="hidden" name="domain" value="{{.Site.Domain}}"><label>Target</label><input class="input" name="target"><label>Weight</label><input class="input" name="weight" value="100"><label>Backup</label><select name="backup"><option value="false">false</option><option value="true">true</option></select><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select><div><button class="btn btn-primary">Save Target</button></div></form></div>{{end}}`
 
 const applyFormHTML = `{{define "apply_form"}}
-  <h2>Apply</h2>
-  <p style="opacity:.8;">Renders/publishes nginx vhosts and reloads when needed.</p>
+<div class="card"><h2>Apply</h2><form method="post" action="/ui/apply" class="form-grid"><label>Domain (optional)</label><input class="input" name="domain" placeholder="example.com"><label>All</label><select name="all"><option value="false">false</option><option value="true">true</option></select><label>Dry run</label><select name="dry"><option value="false">false</option><option value="true">true</option></select><label>Limit (0 = unlimited)</label><input class="input" name="limit" value="0"><div><button class="btn btn-primary">Run Apply</button></div></form></div>{{end}}`
 
-  <form method="post" action="/ui/apply" style="max-width:720px;">
-    <div style="display:grid; grid-template-columns: 180px 1fr; gap:10px;">
-      <label>Domain (optional)</label>
-      <input name="domain" style="padding:8px;" placeholder="example.com">
-
-      <label>All (apply even if not pending)</label>
-      <select name="all" style="padding:8px;">
-        <option value="false" selected>false</option>
-        <option value="true">true</option>
-      </select>
-
-      <label>Dry run</label>
-      <select name="dry" style="padding:8px;">
-        <option value="false" selected>false</option>
-        <option value="true">true</option>
-      </select>
-
-      <label>Limit (0 = unlimited)</label>
-      <input name="limit" style="padding:8px;" value="0">
-    </div>
-
-    <div style="margin-top:14px;">
-      <button style="padding:10px 14px;">Run Apply</button>
-    </div>
-  </form>
-{{end}}`
-
-const applyResultHTML = `{{define "apply_result"}}
-  <h2>Apply Result</h2>
-  {{if .Error}}<p style="color:#b00;">{{.Error}}</p>{{end}}
-
-  {{with .Result}}
-    <p style="opacity:.8;">
-      Reloaded: <b>{{.Reloaded}}</b>
-      &nbsp; Changed: <b>{{len .Changed}}</b>
-    </p>
-
-    <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%;">
-      <thead>
-        <tr>
-          <th align="left">Domain</th>
-          <th>Action</th>
-          <th>Status</th>
-          <th>Changed</th>
-          <th align="left">Error</th>
-        </tr>
-      </thead>
-      <tbody>
-      {{range .Domains}}
-        <tr>
-          <td>{{.Domain}}</td>
-          <td align="center">{{.Action}}</td>
-          <td align="center">{{.Status}}</td>
-          <td align="center">{{if .Changed}}yes{{else}}no{{end}}</td>
-          <td><pre style="white-space:pre-wrap; margin:0;">{{.Error}}</pre></td>
-        </tr>
-      {{end}}
-      </tbody>
-    </table>
-  {{end}}
-
-  <p style="margin-top:14px;">
-    <a href="/ui/sites">Back to Sites</a>
-    &nbsp;|&nbsp;
-    <a href="/ui/apply">Apply again</a>
-  </p>
-{{end}}`
+const applyResultHTML = `{{define "apply_result"}}<div class="card">{{template "apply_result_fragment" .}}</div>{{end}}`
 
 const certsHTML = `{{define "certs"}}
-  <h2>Certificates</h2>
+<div class="card stack"><h2>Certificates</h2><div id="cert-action-result"></div><table class="table"><thead><tr><th>Domain</th><th>Days Left</th><th>Not Before</th><th>Not After</th><th>Actions</th></tr></thead><tbody>{{range .Items}}<tr><td>{{.Domain}}</td><td>{{.DaysLeft}}</td><td>{{.NotBefore.Format "2006-01-02 15:04"}}</td><td>{{.NotAfter.Format "2006-01-02 15:04"}}</td><td class="actions"><a href="/ui/cert/info?domain={{.Domain}}">Info</a><form method="post" action="/ui/cert/issue" hx-post="/ui/cert/issue" hx-target="#cert-action-result" hx-swap="innerHTML"><input type="hidden" name="domain" value="{{.Domain}}"><button class="btn">Issue</button></form></td></tr>{{end}}</tbody></table><form method="post" action="/ui/cert/renew" hx-post="/ui/cert/renew" hx-target="#cert-action-result" hx-swap="innerHTML"><input type="hidden" name="all" value="true"><button class="btn btn-primary">Renew All</button></form></div>{{end}}`
 
-  <div style="margin:10px 0; padding:10px; border:1px solid #ddd;">
-    <form method="get" action="/ui/cert/check" style="display:flex; gap:10px; align-items:center;">
-      <div>Check expiring within</div>
-      <input name="days" value="30" style="padding:6px; width:80px;">
-      <div>days</div>
-      <button style="padding:8px 10px;">Check</button>
-    </form>
-  </div>
-
-  <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%;">
-    <thead>
-      <tr>
-        <th align="left">Domain</th>
-        <th>Days Left</th>
-        <th>Not Before</th>
-        <th>Not After</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-    {{range .Items}}
-      <tr>
-        <td>{{.Domain}}</td>
-        <td align="center">{{.DaysLeft}}</td>
-        <td align="center">{{.NotBefore.Format "2006-01-02 15:04"}}</td>
-        <td align="center">{{.NotAfter.Format "2006-01-02 15:04"}}</td>
-        <td align="center" style="white-space:nowrap;">
-          <a href="/ui/cert/info?domain={{.Domain}}">Info</a>
-          <form method="post" action="/ui/cert/issue" style="display:inline; margin-left:8px;"
-                onsubmit="return confirm('Issue/renew certificate for {{.Domain}} ?');">
-            <input type="hidden" name="domain" value="{{.Domain}}">
-            <button>Issue</button>
-          </form>
-        </td>
-      </tr>
-    {{end}}
-    </tbody>
-  </table>
-
-  <div style="margin-top:14px; padding:10px; border:1px solid #ddd;">
-    <form method="post" action="/ui/cert/renew" onsubmit="return confirm('Renew ALL certificates?');">
-      <input type="hidden" name="all" value="true">
-      <button style="padding:10px 14px;">Renew All</button>
-    </form>
-  </div>
-{{end}}`
-
+const sitesTableHTML = `{{define "sites_table"}}<table class="table"><thead><tr><th>Domain</th><th>Owner</th><th>Mode</th><th>Enabled</th><th>TLS</th><th>Actions</th></tr></thead><tbody>{{range .Items}}<tr><td>{{.Site.Domain}}</td><td>{{index $.Owners .Site.Domain}}</td><td>{{.Site.Mode}}</td><td>{{if .Site.Enabled}}yes{{else}}no{{end}}</td><td>{{ $ci := index $.Certs .Site.Domain }}{{ if $ci }}yes ({{ $ci.DaysLeft }}d){{ else }}no{{ end }}</td><td class="actions"><form method="post" action="/ui/apply" hx-post="/ui/apply" hx-target="#apply-result" hx-swap="innerHTML"><input type="hidden" name="domain" value="{{.Site.Domain}}"><button class="btn">Apply</button></form>{{if eq .Site.Mode "proxy"}}<a href="/ui/sites/targets?domain={{.Site.Domain}}">Targets</a>{{end}}<a href="/ui/sites/edit?domain={{.Site.Domain}}">Edit</a>{{if .Site.Enabled}}<form method="post" action="/ui/sites/disable" hx-post="/ui/sites/disable" hx-target="#sites-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="domain" value="{{.Site.Domain}}"><button class="btn">Disable</button></form>{{else}}<form method="post" action="/ui/sites/enable" hx-post="/ui/sites/enable" hx-target="#sites-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="domain" value="{{.Site.Domain}}"><button class="btn">Enable</button></form><form method="post" action="/ui/sites/delete" hx-post="/ui/sites/delete" hx-target="#sites-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="domain" value="{{.Site.Domain}}"><button class="btn btn-danger">Delete</button></form>{{end}}</td></tr>{{end}}</tbody></table>{{end}}`
+const usersTableHTML = `{{define "users_table"}}<table class="table"><tr><th>ID</th><th>Username</th><th>Enabled</th><th>Package</th><th>Owner</th><th>Actions</th></tr>{{range .Items}}<tr><td>{{.User.ID}}</td><td>{{.User.Username}}</td><td>{{if .User.Enabled}}yes{{else}}no{{end}}</td><td>{{if .PackageName}}{{.PackageName}}{{else}}-{{end}}</td><td>{{.Owner}}</td><td class="actions"><a href="/ui/users/edit?username={{.User.Username}}">Edit</a>{{if .User.Enabled}}<form method="post" action="/ui/users/suspend" hx-post="/ui/users/suspend" hx-target="#users-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="username" value="{{.User.Username}}"><button class="btn">Suspend</button></form>{{else}}<form method="post" action="/ui/users/enable" hx-post="/ui/users/enable" hx-target="#users-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="username" value="{{.User.Username}}"><button class="btn">Enable</button></form>{{end}}<form method="post" action="/ui/users/delete" hx-post="/ui/users/delete" hx-target="#users-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="username" value="{{.User.Username}}"><button class="btn btn-danger">Delete</button></form></td></tr>{{end}}</table>{{end}}`
+const resellersTableHTML = `{{define "resellers_table"}}<table class="table"><tr><th>ID</th><th>Username</th><th>Enabled</th><th>Owned users</th><th>Actions</th></tr>{{range .Items}}<tr><td>{{.ID}}</td><td>{{.Username}}</td><td>{{if .Enabled}}yes{{else}}no{{end}}</td><td>{{index $.UserCount .ID}}</td><td class="actions"><a href="/ui/resellers/edit?username={{.Username}}">Edit</a>{{if .Enabled}}<form method="post" action="/ui/resellers/disable" hx-post="/ui/resellers/disable" hx-target="#resellers-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="username" value="{{.Username}}"><button class="btn">Disable</button></form>{{else}}<form method="post" action="/ui/resellers/enable" hx-post="/ui/resellers/enable" hx-target="#resellers-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="username" value="{{.Username}}"><button class="btn">Enable</button></form>{{end}}<form method="post" action="/ui/resellers/delete" hx-post="/ui/resellers/delete" hx-target="#resellers-table-wrapper" hx-swap="innerHTML"><input type="hidden" name="username" value="{{.Username}}"><button class="btn btn-danger">Delete</button></form></td></tr>{{end}}</table>{{end}}`
+const proxyTargetsTableHTML = `{{define "proxy_targets_table"}}<table class="table"><thead><tr><th>Target</th><th>Weight</th><th>Backup</th><th>Enabled</th><th>Actions</th></tr></thead><tbody>{{range .Targets}}<tr><td>{{.Addr}}</td><td>{{.Weight}}</td><td>{{if .Backup}}yes{{else}}no{{end}}</td><td>{{if .Enabled}}yes{{else}}no{{end}}</td><td><form method="post" action="/ui/sites/targets/del" hx-post="/ui/sites/targets/del" hx-target="#proxy-targets-table" hx-swap="innerHTML"><input type="hidden" name="domain" value="{{$.Site.Domain}}"><input type="hidden" name="target" value="{{.Addr}}"><button class="btn">Disable</button></form></td></tr>{{end}}</tbody></table>{{end}}`
+const applyResultFragmentHTML = `{{define "apply_result_fragment"}}<h3>Apply Result</h3>{{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}{{with .Result}}<p class="muted">Reloaded: <b>{{.Reloaded}}</b> Changed: <b>{{len .Changed}}</b></p><table class="table"><tr><th>Domain</th><th>Action</th><th>Status</th><th>Changed</th><th>Error</th></tr>{{range .Domains}}<tr><td>{{.Domain}}</td><td>{{.Action}}</td><td>{{.Status}}</td><td>{{if .Changed}}yes{{else}}no{{end}}</td><td><pre class="mono">{{.Error}}</pre></td></tr>{{end}}</table>{{end}}{{end}}`
+const certActionResultHTML = `{{define "cert_action_result"}}<div class="alert alert-success">{{.Message}}{{if .Domain}} ({{.Domain}}){{end}}</div>{{end}}`
 const certInfoHTML = `{{define "cert_info"}}
   <h2>Certificate Info</h2>
 
