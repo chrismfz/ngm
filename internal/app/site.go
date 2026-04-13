@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	appdns "mynginx/internal/dns"
 	"mynginx/internal/store"
 	"mynginx/internal/users"
 	"mynginx/internal/util"
@@ -329,6 +330,18 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 	if err != nil {
 		return out, err
 	}
+	if a.dns != nil {
+		dnsIn := a.siteDNSInputFromParts(domain, parentDomain)
+		if parentDomain == "" {
+			if err := a.dns.EnsureRootSite(ctx, dnsIn); err != nil {
+				return out, fmt.Errorf("dns ensure root site: %w", err)
+			}
+		} else {
+			if err := a.dns.EnsureSubdomainSite(ctx, dnsIn); err != nil {
+				return out, fmt.Errorf("dns ensure subdomain site: %w", err)
+			}
+		}
+	}
 	out.Site = s
 
 	// Persist php.ini overrides sidecar (php-mode only)
@@ -428,6 +441,30 @@ func (a *App) SiteDelete(ctx context.Context, domain string) error {
 	domain = strings.TrimSpace(domain)
 	if domain == "" {
 		return fmt.Errorf("domain is required")
+	}
+	site, err := a.st.GetSiteByDomain(domain)
+	if err != nil {
+		return err
+	}
+	if a.dns != nil {
+		if site.ParentDomain == nil || strings.TrimSpace(*site.ParentDomain) == "" {
+			sites, err := a.st.ListSites()
+			if err != nil {
+				return err
+			}
+			for _, s := range sites {
+				if s.ParentDomain != nil && strings.EqualFold(strings.TrimSpace(*s.ParentDomain), domain) {
+					return fmt.Errorf("cannot delete root domain %s: dependent subdomain site %s exists", domain, s.Domain)
+				}
+			}
+			if err := a.dns.DeleteRootSite(ctx, a.siteDNSInputFromParts(site.Domain, "")); err != nil {
+				return fmt.Errorf("dns delete root site: %w", err)
+			}
+		} else {
+			if err := a.dns.DeleteSubdomainSite(ctx, a.siteDNSInputFromParts(site.Domain, strings.TrimSpace(*site.ParentDomain))); err != nil {
+				return fmt.Errorf("dns delete subdomain site: %w", err)
+			}
+		}
 	}
 
 	// Best-effort remove live vhost (ignore missing file)
@@ -560,6 +597,9 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 		wasRoot := cur.ParentDomain == nil || strings.TrimSpace(*cur.ParentDomain) == ""
 		isRoot := strings.TrimSpace(newParent) == ""
 		if wasRoot != isRoot {
+			if a.dns != nil {
+				return store.Site{}, fmt.Errorf("changing root/subdomain relationship is not supported while dns.enabled=true in this phase")
+			}
 			if isRoot {
 				currentRoots, err := a.st.CountRootDomainsByUserID(owner.ID)
 				if err != nil {
@@ -619,6 +659,22 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 	}
 
 	return updated, nil
+}
+
+func (a *App) siteDNSInputFromParts(domain, parent string) appdns.SiteDNSInput {
+	in := appdns.SiteDNSInput{
+		FQDN:         normalizeDomain(domain),
+		ParentDomain: normalizeDomain(parent),
+		Template:     a.cfg.DNS.DefaultTemplate,
+		DefaultIPv4:  strings.TrimSpace(a.cfg.DNS.DefaultIPv4),
+		DefaultIPv6:  strings.TrimSpace(a.cfg.DNS.DefaultIPv6),
+	}
+	if in.ParentDomain == "" {
+		in.SiteKind = appdns.SiteKindRoot
+	} else {
+		in.SiteKind = appdns.SiteKindSubdomain
+	}
+	return in
 }
 
 func (a *App) SiteList(ctx context.Context) ([]SiteListItem, error) {

@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"mynginx/internal/config"
+	appdns "mynginx/internal/dns"
+	bindprovider "mynginx/internal/dns/bind"
 	"mynginx/internal/nginx"
 	"mynginx/internal/store"
 )
@@ -16,6 +18,7 @@ type App struct {
 	paths config.Paths
 	st    store.SiteStore
 	ng    *nginx.Manager
+	dns   appdns.Provider
 
 	applyMu sync.Mutex
 }
@@ -41,5 +44,19 @@ func New(cfg *config.Config, paths config.Paths, st store.SiteStore) (*App, erro
 		return nil, fmt.Errorf("nginx layout: %w", err)
 	}
 
-	return &App{cfg: cfg, paths: paths, st: st, ng: mgr}, nil
+	var dnsProvider appdns.Provider
+	if cfg.DNS.Enabled {
+		switch cfg.DNS.Provider {
+		case "", "bind":
+			p, err := bindprovider.New(cfg.DNS)
+			if err != nil {
+				return nil, fmt.Errorf("dns provider init: %w", err)
+			}
+			dnsProvider = p
+		default:
+			return nil, fmt.Errorf("unsupported dns.provider %q", cfg.DNS.Provider)
+		}
+	}
+
+	return &App{cfg: cfg, paths: paths, st: st, ng: mgr, dns: dnsProvider}, nil
 }
