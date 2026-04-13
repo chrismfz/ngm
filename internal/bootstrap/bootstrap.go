@@ -11,6 +11,7 @@ import (
 
 func Init(cfg *config.Config, paths config.Paths) error {
 	mgr := nginx.NewManager(paths.NginxRoot, paths.NginxBin, paths.NginxMainConf, paths.NginxSitesDir, paths.NginxStageDir, paths.NginxBackupDir)
+	mgr.SetControlMode(cfg.Nginx.Apply.ReloadMode, cfg.Nginx.ServiceName)
 	if err := mgr.EnsureLayout(); err != nil {
 		return fmt.Errorf("ensure nginx layout: %w", err)
 	}
@@ -65,6 +66,7 @@ func Init(cfg *config.Config, paths config.Paths) error {
 
 func Test(cfg *config.Config, paths config.Paths) error {
 	mgr := nginx.NewManager(paths.NginxRoot, paths.NginxBin, paths.NginxMainConf, paths.NginxSitesDir, paths.NginxStageDir, paths.NginxBackupDir)
+	mgr.SetControlMode(cfg.Nginx.Apply.ReloadMode, cfg.Nginx.ServiceName)
 	if err := mgr.EnsureLayout(); err != nil {
 		return fmt.Errorf("ensure nginx layout: %w", err)
 	}

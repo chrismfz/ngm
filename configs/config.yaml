@@ -30,6 +30,8 @@ nginx:
 
   # Path to the nginx binary (relative to root).
   bin: "/usr/sbin/nginx"
+  # systemd service unit name (used when apply.reload_mode=systemd).
+  service_name: "nginx"
   # Root directory for nginx cache data (absolute path).
   cache_root: "/var/cache/nginx"
   user: "www-data"

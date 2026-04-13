@@ -36,6 +36,7 @@ func New(cfg *config.Config, paths config.Paths, st store.SiteStore) (*App, erro
 		paths.NginxStageDir,
 		paths.NginxBackupDir,
 	)
+	mgr.SetControlMode(cfg.Nginx.Apply.ReloadMode, cfg.Nginx.ServiceName)
 	if err := mgr.EnsureLayout(); err != nil {
 		return nil, fmt.Errorf("nginx layout: %w", err)
 	}

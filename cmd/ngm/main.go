@@ -769,6 +769,7 @@ func runStatus(cfg *config.Config, paths config.Paths) {
 	fmt.Printf("backup_dir  : %s\n", paths.NginxBackupDir)
 
 	mgr := nginx.NewManager(paths.NginxRoot, paths.NginxBin, paths.NginxMainConf, paths.NginxSitesDir, paths.NginxStageDir, paths.NginxBackupDir)
+	mgr.SetControlMode(cfg.Nginx.Apply.ReloadMode, cfg.Nginx.ServiceName)
 	if err := mgr.EnsureLayout(); err != nil {
 		log.Fatalf("nginx layout: %v", err)
 	}
@@ -1337,20 +1338,20 @@ func applySingle(
 
 		if err := mgr.TestConfig(); err != nil {
 			rollbackFromBackup(mgr, []string{d})
-			_ = mgr.Reload()
+			_ = mgr.ReloadOrStart()
 			if sqlSt != nil {
 				_ = sqlSt.UpdateApplyResult(d, "fail", "nginx -t failed (rolled back): "+err.Error(), "")
 			}
 			return fmt.Errorf("nginx -t failed (rolled back): %w", err)
 		}
 
-		if err := mgr.Reload(); err != nil {
+		if err := mgr.ReloadOrStart(); err != nil {
 			rollbackFromBackup(mgr, []string{d})
-			_ = mgr.Reload()
+			_ = mgr.ReloadOrStart()
 			if sqlSt != nil {
-				_ = sqlSt.UpdateApplyResult(d, "fail", "nginx reload failed (rolled back): "+err.Error(), "")
+				_ = sqlSt.UpdateApplyResult(d, "fail", "nginx reload/start failed (rolled back): "+err.Error(), "")
 			}
-			return fmt.Errorf("nginx reload failed (rolled back): %w", err)
+			return fmt.Errorf("nginx reload/start failed (rolled back): %w", err)
 		}
 
 		if sqlSt != nil {
@@ -1398,29 +1399,29 @@ func applySingle(
 	// Single-domain apply must also validate and reload nginx (same as bulk apply).
 	if err := mgr.TestConfig(); err != nil {
 		rollbackFromBackup(mgr, []string{d})
-		_ = mgr.Reload()
+		_ = mgr.ReloadOrStart()
 		if sqlSt != nil {
 			_ = sqlSt.UpdateApplyResult(d, "fail", "nginx -t failed (rolled back): "+err.Error(), renderHash)
 		}
 		return fmt.Errorf("nginx -t failed (rolled back): %w", err)
 	}
 
-	if err := mgr.Reload(); err != nil {
+	if err := mgr.ReloadOrStart(); err != nil {
 		rollbackFromBackup(mgr, []string{d})
-		_ = mgr.Reload()
+		_ = mgr.ReloadOrStart()
 		if sqlSt != nil {
-			_ = sqlSt.UpdateApplyResult(d, "fail", "nginx reload failed (rolled back): "+err.Error(), renderHash)
+			_ = sqlSt.UpdateApplyResult(d, "fail", "nginx reload/start failed (rolled back): "+err.Error(), renderHash)
 		}
-		return fmt.Errorf("nginx reload failed (rolled back): %w", err)
+		return fmt.Errorf("nginx reload/start failed (rolled back): %w", err)
 	}
 
-	if err := mgr.Reload(); err != nil {
+	if err := mgr.ReloadOrStart(); err != nil {
 		rollbackFromBackup(mgr, []string{d})
-		_ = mgr.Reload()
+		_ = mgr.ReloadOrStart()
 		if sqlSt != nil {
-			_ = sqlSt.UpdateApplyResult(d, "fail", "nginx reload failed (rolled back): "+err.Error(), renderHash)
+			_ = sqlSt.UpdateApplyResult(d, "fail", "nginx reload/start failed (rolled back): "+err.Error(), renderHash)
 		}
-		return fmt.Errorf("nginx reload failed (rolled back): %w", err)
+		return fmt.Errorf("nginx reload/start failed (rolled back): %w", err)
 	}
 
 	if sqlSt != nil {
@@ -1486,8 +1487,8 @@ func reloadNginx(paths config.Paths) error {
 	if err := mgr.TestConfig(); err != nil {
 		return fmt.Errorf("nginx -t failed: %w", err)
 	}
-	if err := mgr.Reload(); err != nil {
-		return fmt.Errorf("nginx reload failed: %w", err)
+	if err := mgr.ReloadOrStart(); err != nil {
+		return fmt.Errorf("nginx reload/start failed: %w", err)
 	}
 	return nil
 }

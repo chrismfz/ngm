@@ -133,7 +133,7 @@ func (a *App) Apply(ctx context.Context, req ApplyRequest) (ApplyResult, error) 
 		}
 
 		_, content, err := a.ng.RenderSiteToStaging(td)
-        	renderHash := ""
+		renderHash := ""
 		if content != nil {
 			renderHash = util.Sha256Hex(content)
 		}
@@ -178,7 +178,7 @@ func (a *App) Apply(ctx context.Context, req ApplyRequest) (ApplyResult, error) 
 	if a.cfg.Nginx.Apply.TestBeforeReload {
 		if err := a.ng.TestConfig(); err != nil {
 			rollbackFromBackup(a.ng, changed)
-			_ = a.ng.Reload()
+			_ = a.ng.ReloadOrStart()
 			if updater != nil {
 				for _, d := range changed {
 					_ = updater.UpdateApplyResult(d, "fail", "nginx -t failed (rolled back): "+err.Error(), changedHashes[d])
@@ -188,15 +188,15 @@ func (a *App) Apply(ctx context.Context, req ApplyRequest) (ApplyResult, error) 
 		}
 	}
 
-	if err := a.ng.Reload(); err != nil {
+	if err := a.ng.ReloadOrStart(); err != nil {
 		rollbackFromBackup(a.ng, changed)
-		_ = a.ng.Reload()
+		_ = a.ng.ReloadOrStart()
 		if updater != nil {
 			for _, d := range changed {
-				_ = updater.UpdateApplyResult(d, "fail", "nginx reload failed (rolled back): "+err.Error(), changedHashes[d])
+				_ = updater.UpdateApplyResult(d, "fail", "nginx reload/start failed (rolled back): "+err.Error(), changedHashes[d])
 			}
 		}
-		return res, fmt.Errorf("nginx reload failed (rolled back): %w", err)
+		return res, fmt.Errorf("nginx reload/start failed (rolled back): %w", err)
 	}
 
 	res.Changed = append([]string{}, changed...)
@@ -235,20 +235,20 @@ func (a *App) applyOne(domain string, dry bool) (ApplyDomainResult, bool, error)
 		if a.cfg.Nginx.Apply.TestBeforeReload {
 			if err := a.ng.TestConfig(); err != nil {
 				rollbackFromBackup(a.ng, []string{domain})
-				_ = a.ng.Reload()
+				_ = a.ng.ReloadOrStart()
 				if updater != nil {
 					_ = updater.UpdateApplyResult(domain, "fail", "nginx -t failed (rolled back): "+err.Error(), "")
 				}
 				return ApplyDomainResult{Domain: domain, Action: "delete", Status: "fail", Error: err.Error()}, true, fmt.Errorf("nginx -t failed (rolled back): %w", err)
 			}
 		}
-		if err := a.ng.Reload(); err != nil {
+		if err := a.ng.ReloadOrStart(); err != nil {
 			rollbackFromBackup(a.ng, []string{domain})
-			_ = a.ng.Reload()
+			_ = a.ng.ReloadOrStart()
 			if updater != nil {
-				_ = updater.UpdateApplyResult(domain, "fail", "nginx reload failed (rolled back): "+err.Error(), "")
+				_ = updater.UpdateApplyResult(domain, "fail", "nginx reload/start failed (rolled back): "+err.Error(), "")
 			}
-			return ApplyDomainResult{Domain: domain, Action: "delete", Status: "fail", Error: err.Error()}, true, fmt.Errorf("nginx reload failed (rolled back): %w", err)
+			return ApplyDomainResult{Domain: domain, Action: "delete", Status: "fail", Error: err.Error()}, true, fmt.Errorf("nginx reload/start failed (rolled back): %w", err)
 		}
 		if updater != nil {
 			_ = updater.UpdateApplyResult(domain, "ok", "", "")
@@ -294,20 +294,20 @@ func (a *App) applyOne(domain string, dry bool) (ApplyDomainResult, bool, error)
 	if a.cfg.Nginx.Apply.TestBeforeReload {
 		if err := a.ng.TestConfig(); err != nil {
 			rollbackFromBackup(a.ng, []string{domain})
-			_ = a.ng.Reload()
+			_ = a.ng.ReloadOrStart()
 			if updater != nil {
 				_ = updater.UpdateApplyResult(domain, "fail", "nginx -t failed (rolled back): "+err.Error(), renderHash)
 			}
 			return ApplyDomainResult{Domain: domain, Action: "apply", Status: "fail", Changed: true, Error: err.Error(), RenderHash: renderHash}, true, fmt.Errorf("nginx -t failed (rolled back): %w", err)
 		}
 	}
-	if err := a.ng.Reload(); err != nil {
+	if err := a.ng.ReloadOrStart(); err != nil {
 		rollbackFromBackup(a.ng, []string{domain})
-		_ = a.ng.Reload()
+		_ = a.ng.ReloadOrStart()
 		if updater != nil {
-			_ = updater.UpdateApplyResult(domain, "fail", "nginx reload failed (rolled back): "+err.Error(), renderHash)
+			_ = updater.UpdateApplyResult(domain, "fail", "nginx reload/start failed (rolled back): "+err.Error(), renderHash)
 		}
-		return ApplyDomainResult{Domain: domain, Action: "apply", Status: "fail", Changed: true, Error: err.Error(), RenderHash: renderHash}, true, fmt.Errorf("nginx reload failed (rolled back): %w", err)
+		return ApplyDomainResult{Domain: domain, Action: "apply", Status: "fail", Changed: true, Error: err.Error(), RenderHash: renderHash}, true, fmt.Errorf("nginx reload/start failed (rolled back): %w", err)
 	}
 
 	if updater != nil {
