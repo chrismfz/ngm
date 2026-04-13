@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -29,6 +30,7 @@ import (
 	"mynginx/internal/web"
 
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/term"
 )
 
 var (
@@ -194,7 +196,7 @@ func printPanelUserUsage() {
 	fmt.Println("Usage: ngm panel-user <add|list|edit|del> [flags]")
 	fmt.Println("Manages panel users for roles: admin, reseller, user.")
 	fmt.Println("Important flags:")
-	fmt.Println("  add  --user --pass [--role admin|reseller|user] [--enabled] [--package]")
+	fmt.Println("  add  [--user] [--pass] [--role admin|reseller|user] [--enabled] [--package]")
 	fmt.Println("  list [--role admin|reseller|user] [--enabled true|false]")
 	fmt.Println("  edit --user [--pass] [--enabled true|false] [--role admin|reseller|user] [--package]")
 	fmt.Println("  del  --user")
@@ -245,7 +247,7 @@ func printAdminUsage() {
 	fmt.Println("Usage: ngm admin <add|list|edit|del> [flags]")
 	fmt.Println("Thin alias around `panel-user` with role=admin expectations.")
 	fmt.Println("Important flags:")
-	fmt.Println("  add  --user --pass [--enabled] [--package]")
+	fmt.Println("  add  [--user] [--pass] [--enabled] [--package]")
 	fmt.Println("  list [--enabled true|false]")
 	fmt.Println("  edit --user [--pass] [--enabled true|false] [--package]")
 	fmt.Println("  del  --user")
@@ -471,7 +473,31 @@ func cmdPanelUserAdd(st store.SiteStore, args []string, forcedRole string) error
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*user) == "" || *pass == "" {
+
+	finalUser := strings.TrimSpace(*user)
+	finalPass := *pass
+
+	if finalUser == "" {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("required: --user and --pass")
+		}
+		input, err := promptInput("Username: ", false)
+		if err != nil {
+			return err
+		}
+		finalUser = strings.TrimSpace(input)
+	}
+	if finalPass == "" {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("required: --user and --pass")
+		}
+		input, err := promptInput("Password: ", true)
+		if err != nil {
+			return err
+		}
+		finalPass = input
+	}
+	if finalUser == "" || finalPass == "" {
 		return fmt.Errorf("required: --user and --pass")
 	}
 
@@ -485,13 +511,13 @@ func cmdPanelUserAdd(st store.SiteStore, args []string, forcedRole string) error
 
 	passwordHash := "$SHADOW$"
 	if finalRole != "user" {
-		hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte(finalPass), bcrypt.DefaultCost)
 		if err != nil {
 			return err
 		}
 		passwordHash = string(hash)
 	}
-	pu, err := st.CreatePanelUser(strings.TrimSpace(*user), passwordHash, finalRole, *enabled)
+	pu, err := st.CreatePanelUser(finalUser, passwordHash, finalRole, *enabled)
 	if err != nil {
 		return err
 	}
@@ -508,7 +534,7 @@ func cmdPanelUserAdd(st store.SiteStore, args []string, forcedRole string) error
 		if err := users.CreateSystemUser(pu.Username, home); err != nil {
 			return err
 		}
-		if err := users.SetSystemPassword(pu.Username, *pass); err != nil {
+		if err := users.SetSystemPassword(pu.Username, finalPass); err != nil {
 			return err
 		}
 	}
@@ -519,6 +545,24 @@ func cmdPanelUserAdd(st store.SiteStore, args []string, forcedRole string) error
 	}
 	fmt.Println("OK: panel user saved:", pu.Username)
 	return nil
+}
+
+func promptInput(label string, secret bool) (string, error) {
+	fmt.Fprint(os.Stderr, label)
+	if secret {
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func cmdPanelUserList(st store.SiteStore, args []string, forcedRole string) error {
