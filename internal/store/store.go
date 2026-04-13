@@ -130,6 +130,7 @@ type SiteStore interface {
 	EnsureUser(username, homeDir string) (User, error)
 	GetUserByUsername(username string) (User, error)
 	GetUserByID(id int64) (User, error)
+	ListUsers() ([]User, error)
 
 	UpsertSite(s Site) (Site, error)
 	GetSiteByDomain(domain string) (Site, error)
