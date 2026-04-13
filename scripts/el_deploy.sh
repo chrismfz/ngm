@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Fresh EL10-style bootstrap for NGM
 # Assumptions:
-# - config.yaml already exists and is correct
+# - If config is missing, bootstrap from src/configs/config.yaml
 # - you want nginx runtime group handling around "nobody"
 # - PHP is Remi parallel PHP 8.3 (php83-php-fpm)
 #
@@ -17,8 +17,8 @@ set -euo pipefail
 #
 # Example:
 #   chmod +x bootstrap_ngm_el10_nobody.sh
-#   # Pre-run: place your config file at /opt/ngm/config.yaml (or set CFG_FILE to another path)
-#   install -m 0644 ./config.yaml /opt/ngm/config.yaml
+#   # Optional pre-run: place your config file at /opt/ngm/config.yaml (or set CFG_FILE to another path)
+#   # If omitted, installer mode will copy src/configs/config.yaml to CFG_FILE.
 #   ./bootstrap_ngm_el10_nobody.sh
 
 REPO_URL="${REPO_URL:-https://github.com/chrismfz/ngm.git}"
@@ -209,11 +209,24 @@ disable_firewalld_if_requested() {
 }
 
 maybe_run_ngm_provision() {
+  local default_cfg_template="$SRC_DIR/configs/config.yaml"
+
   if [[ ! -f "$CFG_FILE" ]]; then
-    echo "ERROR: Config file not found at resolved CFG_FILE path: $CFG_FILE" >&2
-    echo "ERROR: Example fix: install -m 0644 ./config.yaml \"$CFG_FILE\"" >&2
-    echo "ERROR: Deployment aborted. Provide a valid config at $CFG_FILE and re-run deployment." >&2
-    return 1
+    if [[ ! -f "$default_cfg_template" ]]; then
+      echo "ERROR: Config file not found at resolved CFG_FILE path: $CFG_FILE" >&2
+      echo "ERROR: Default template not found at: $default_cfg_template" >&2
+      echo "ERROR: Example fix: install -m 0644 ./config.yaml \"$CFG_FILE\"" >&2
+      echo "ERROR: Deployment aborted. Provide a valid config at $CFG_FILE and re-run deployment." >&2
+      return 1
+    fi
+
+    install -m 0644 "$default_cfg_template" "$CFG_FILE"
+    echo "INFO: Installed default config template from $default_cfg_template to $CFG_FILE"
+
+    if grep -q 'change-me-please' "$CFG_FILE"; then
+      echo "WARNING: Config contains placeholder values (e.g., change-me-please)." >&2
+      echo "WARNING: Update and harden $CFG_FILE before using in production." >&2
+    fi
   fi
 
   if "$BIN_DIR/ngm" -c "$CFG_FILE" help provision >/dev/null 2>&1; then
@@ -252,7 +265,7 @@ Hardcoded runtime assumptions in this script:
 
 Notes:
 - This script assumes Remi parallel PHP 8.3 (php83-php-fpm).
-- This script assumes your existing config.yaml already matches that layout.
+- If config is missing, installer mode bootstraps from src/configs/config.yaml.
 - SELinux adjustments were applied for content under /home/<user>/sites.
 - If DNS_ENABLED=false, bind was still installed, but named was not enabled.
 
