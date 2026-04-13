@@ -115,10 +115,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ui/packages/delete", s.requireAuth(s.requireRole("admin", "reseller")(s.handlePackageDelete)))
 	mux.HandleFunc("/ui/users", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUsers)))
 	mux.HandleFunc("/ui/users/new", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserNew)))
+	mux.HandleFunc("/ui/users/edit", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserEdit)))
 	mux.HandleFunc("/ui/users/suspend", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserSuspend)))
+	mux.HandleFunc("/ui/users/enable", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserEnable)))
 	mux.HandleFunc("/ui/users/delete", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserDelete)))
 	mux.HandleFunc("/ui/resellers", s.requireAuth(s.requireRole("admin")(s.handleResellers)))
 	mux.HandleFunc("/ui/resellers/new", s.requireAuth(s.requireRole("admin")(s.handleResellerNew)))
+	mux.HandleFunc("/ui/resellers/edit", s.requireAuth(s.requireRole("admin")(s.handleResellerEdit)))
+	mux.HandleFunc("/ui/resellers/disable", s.requireAuth(s.requireRole("admin")(s.handleResellerDisable)))
+	mux.HandleFunc("/ui/resellers/enable", s.requireAuth(s.requireRole("admin")(s.handleResellerEnable)))
+	mux.HandleFunc("/ui/resellers/delete", s.requireAuth(s.requireRole("admin")(s.handleResellerDelete)))
 	mux.HandleFunc("/ui/backup", s.requireAuth(s.handleBackup))
 
 	return mux
@@ -1146,44 +1152,111 @@ func (s *Server) handlePackageDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := s.st.ListPanelUsers()
+	items, err := s.st.ListPanelUsers()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	sess, _ := s.sessionFromCtx(r)
-	filtered := users[:0]
-	for _, u := range users {
+	pkgByUser, _ := s.userPackageMap()
+	nameByID := map[int64]string{}
+	for _, u := range items {
+		nameByID[u.ID] = u.Username
+	}
+	var filtered []map[string]any
+	for _, u := range items {
 		if u.Role != "user" {
 			continue
 		}
 		if sess.Role == "reseller" && (u.ResellerID == nil || *u.ResellerID != sess.UserID) {
 			continue
 		}
-		filtered = append(filtered, u)
+		owner := "-"
+		if u.ResellerID != nil {
+			if n, ok := nameByID[*u.ResellerID]; ok && n != "" {
+				owner = n
+			} else {
+				owner = "#" + strconv.FormatInt(*u.ResellerID, 10)
+			}
+		}
+		filtered = append(filtered, map[string]any{
+			"User":        u,
+			"PackageName": pkgByUser[u.ID],
+			"Owner":       owner,
+		})
 	}
-	s.render(w, r, "Users", "users", map[string]any{"Items": filtered})
+	s.render(w, r, "Users", "users", map[string]any{
+		"Items": filtered,
+		"Error": strings.TrimSpace(r.URL.Query().Get("error")),
+		"Info":  strings.TrimSpace(r.URL.Query().Get("info")),
+	})
 }
 
 func (s *Server) handleUserNew(w http.ResponseWriter, r *http.Request) {
+	sess, _ := s.sessionFromCtx(r)
+	pkgs, _ := s.listAssignablePackages(sess)
+	allUsers, _ := s.st.ListPanelUsers()
+	resellers := make([]store.PanelUser, 0)
+	for _, u := range allUsers {
+		if u.Role == "reseller" {
+			resellers = append(resellers, u)
+		}
+	}
 	if r.Method == http.MethodGet {
-		s.render(w, r, "New User", "user_form", map[string]any{})
+		s.render(w, r, "New User", "user_form", map[string]any{
+			"Mode":       "new",
+			"FormAction": "/ui/users/new",
+			"Packages":   pkgs,
+			"Resellers":  resellers,
+			"IsAdmin":    sess.Role == "admin",
+			"Form": map[string]string{
+				"enabled": "true",
+			},
+		})
 		return
 	}
 	_ = r.ParseForm()
-	sess, _ := s.sessionFromCtx(r)
 	username := strings.TrimSpace(r.FormValue("username"))
 	pass := r.FormValue("password")
-	pu, err := s.st.CreatePanelUser(username, "$SHADOW$", "user", true)
+	if username == "" || pass == "" {
+		s.render(w, r, "New User", "user_form", map[string]any{
+			"Mode":       "new",
+			"FormAction": "/ui/users/new",
+			"Error":      "username and password are required",
+			"Packages":   pkgs,
+			"Resellers":  resellers,
+			"IsAdmin":    sess.Role == "admin",
+			"Form": map[string]string{
+				"username":   username,
+				"enabled":    r.FormValue("enabled"),
+				"package_id": r.FormValue("package_id"),
+				"reseller":   r.FormValue("reseller_id"),
+			},
+		})
+		return
+	}
+	enabled := parseBool(r.FormValue("enabled"), true)
+	pu, err := s.st.CreatePanelUser(username, "$SHADOW$", "user", enabled)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.render(w, r, "New User", "user_form", map[string]any{
+			"Mode":       "new",
+			"FormAction": "/ui/users/new",
+			"Error":      err.Error(),
+			"Packages":   pkgs,
+			"Resellers":  resellers,
+			"IsAdmin":    sess.Role == "admin",
+		})
 		return
 	}
 	pu.SystemUser = username
+	pu.Enabled = enabled
 	pu.CreatedBy = &sess.UserID
 	if sess.Role == "reseller" {
 		pu.ResellerID = &sess.UserID
 		pu.OwnerID = &sess.UserID
+	} else if rid, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("reseller_id")), 10, 64); rid > 0 {
+		pu.ResellerID = &rid
+		pu.OwnerID = &rid
 	}
 	if _, err := s.st.UpdatePanelUser(pu); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1192,20 +1265,315 @@ func (s *Server) handleUserNew(w http.ResponseWriter, r *http.Request) {
 	home := filepath.Join(s.cfg.Hosting.HomeRoot, username)
 	_ = users.CreateSystemUser(username, home)
 	_ = users.SetSystemPassword(username, pass)
+	if pkgID, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("package_id")), 10, 64); pkgID > 0 {
+		_ = s.st.AssignPackage(pu.ID, pkgID, sess.UserID)
+	}
+	if !enabled {
+		_ = users.SuspendSystemUser(pu.SystemUser)
+	}
 	http.Redirect(w, r, "/ui/users", http.StatusFound)
 }
 
+func (s *Server) handleUserEdit(w http.ResponseWriter, r *http.Request) {
+	sess, _ := s.sessionFromCtx(r)
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if r.Method == http.MethodPost {
+		_ = r.ParseForm()
+		username = strings.TrimSpace(r.FormValue("username"))
+	}
+	target, err := s.st.GetPanelUserByUsername(username)
+	if err != nil || target.Role != "user" || !s.canManagePanelUser(sess, target) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if r.Method == http.MethodGet {
+		pkgs, _ := s.listAssignablePackages(sess)
+		up, err := s.st.GetUserPackage(target.ID)
+		packageID := int64(0)
+		if err == nil {
+			packageID = up.PackageID
+		}
+		s.render(w, r, "Edit User", "user_form", map[string]any{
+			"Mode":       "edit",
+			"FormAction": "/ui/users/edit",
+			"Packages":   pkgs,
+			"PanelUser":  target,
+			"Form": map[string]string{
+				"username":   target.Username,
+				"enabled":    boolStr(target.Enabled),
+				"package_id": strconv.FormatInt(packageID, 10),
+			},
+		})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	target.Enabled = parseBool(r.FormValue("enabled"), true)
+	pass := strings.TrimSpace(r.FormValue("password"))
+	sysUser := strings.TrimSpace(target.SystemUser)
+	if sysUser == "" {
+		sysUser = target.Username
+	}
+	if pass != "" {
+		_ = users.SetSystemPassword(sysUser, pass)
+	}
+	if _, err := s.st.UpdatePanelUser(target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if target.Enabled {
+		_ = users.UnsuspendSystemUser(sysUser)
+	} else {
+		_ = users.SuspendSystemUser(sysUser)
+	}
+	pkgID, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("package_id")), 10, 64)
+	if pkgID > 0 {
+		_ = s.st.AssignPackage(target.ID, pkgID, sess.UserID)
+	} else {
+		_ = s.st.UnassignPackage(target.ID)
+	}
+	http.Redirect(w, r, "/ui/users?info="+url.QueryEscape("user updated"), http.StatusFound)
+}
+
 func (s *Server) handleUserSuspend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	sess, _ := s.sessionFromCtx(r)
+	username := strings.TrimSpace(r.FormValue("username"))
+	target, err := s.st.GetPanelUserByUsername(username)
+	if err != nil || target.Role != "user" || !s.canManagePanelUser(sess, target) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	target.Enabled = false
+	if _, err := s.st.UpdatePanelUser(target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sysUser := strings.TrimSpace(target.SystemUser)
+	if sysUser == "" {
+		sysUser = target.Username
+	}
+	_ = users.SuspendSystemUser(sysUser)
+	http.Redirect(w, r, "/ui/users", http.StatusFound)
+}
+
+func (s *Server) handleUserEnable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	sess, _ := s.sessionFromCtx(r)
+	username := strings.TrimSpace(r.FormValue("username"))
+	target, err := s.st.GetPanelUserByUsername(username)
+	if err != nil || target.Role != "user" || !s.canManagePanelUser(sess, target) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	target.Enabled = true
+	if _, err := s.st.UpdatePanelUser(target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sysUser := strings.TrimSpace(target.SystemUser)
+	if sysUser == "" {
+		sysUser = target.Username
+	}
+	_ = users.UnsuspendSystemUser(sysUser)
 	http.Redirect(w, r, "/ui/users", http.StatusFound)
 }
 func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	sess, _ := s.sessionFromCtx(r)
+	username := strings.TrimSpace(r.FormValue("username"))
+	target, err := s.st.GetPanelUserByUsername(username)
+	if err != nil || target.Role != "user" || !s.canManagePanelUser(sess, target) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	_ = s.st.UnassignPackage(target.ID)
+	if err := s.st.DeletePanelUser(target.ID); err != nil {
+		http.Redirect(w, r, "/ui/users?error="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	sysUser := strings.TrimSpace(target.SystemUser)
+	if sysUser == "" {
+		sysUser = target.Username
+	}
+	_ = users.DeleteSystemUser(sysUser)
 	http.Redirect(w, r, "/ui/users", http.StatusFound)
 }
 func (s *Server) handleResellers(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, "Resellers", "resellers", map[string]any{})
+	allUsers, err := s.st.ListPanelUsers()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	userCounts := map[int64]int{}
+	var items []store.PanelUser
+	for _, u := range allUsers {
+		if u.Role == "user" && u.ResellerID != nil {
+			userCounts[*u.ResellerID]++
+		}
+		if u.Role == "reseller" {
+			items = append(items, u)
+		}
+	}
+	s.render(w, r, "Resellers", "resellers", map[string]any{
+		"Items":     items,
+		"UserCount": userCounts,
+		"Error":     strings.TrimSpace(r.URL.Query().Get("error")),
+		"Info":      strings.TrimSpace(r.URL.Query().Get("info")),
+	})
 }
 func (s *Server) handleResellerNew(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, "New Reseller", "reseller_form", map[string]any{})
+	if r.Method == http.MethodGet {
+		s.render(w, r, "New Reseller", "reseller_form", map[string]any{
+			"Mode":       "new",
+			"FormAction": "/ui/resellers/new",
+			"Form": map[string]string{
+				"enabled": "true",
+			},
+		})
+		return
+	}
+	_ = r.ParseForm()
+	username := strings.TrimSpace(r.FormValue("username"))
+	pass := r.FormValue("password")
+	if username == "" || pass == "" {
+		s.render(w, r, "New Reseller", "reseller_form", map[string]any{
+			"Mode":       "new",
+			"FormAction": "/ui/resellers/new",
+			"Error":      "username and password are required",
+			"Form": map[string]string{
+				"username": username,
+				"enabled":  r.FormValue("enabled"),
+			},
+		})
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	enabled := parseBool(r.FormValue("enabled"), true)
+	if _, err := s.st.CreatePanelUser(username, string(hash), "reseller", enabled); err != nil {
+		s.render(w, r, "New Reseller", "reseller_form", map[string]any{
+			"Mode":       "new",
+			"FormAction": "/ui/resellers/new",
+			"Error":      err.Error(),
+			"Form": map[string]string{
+				"username": username,
+				"enabled":  r.FormValue("enabled"),
+			},
+		})
+		return
+	}
+	http.Redirect(w, r, "/ui/resellers?info="+url.QueryEscape("reseller created"), http.StatusFound)
+}
+
+func (s *Server) handleResellerEdit(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	if r.Method == http.MethodPost {
+		_ = r.ParseForm()
+		username = strings.TrimSpace(r.FormValue("username"))
+	}
+	target, err := s.st.GetPanelUserByUsername(username)
+	if err != nil || target.Role != "reseller" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if r.Method == http.MethodGet {
+		s.render(w, r, "Edit Reseller", "reseller_form", map[string]any{
+			"Mode":       "edit",
+			"FormAction": "/ui/resellers/edit",
+			"PanelUser":  target,
+			"Form": map[string]string{
+				"username": target.Username,
+				"enabled":  boolStr(target.Enabled),
+			},
+		})
+		return
+	}
+	target.Enabled = parseBool(r.FormValue("enabled"), true)
+	if pass := strings.TrimSpace(r.FormValue("password")); pass != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		target.PasswordHash = string(hash)
+	}
+	if _, err := s.st.UpdatePanelUser(target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/resellers?info="+url.QueryEscape("reseller updated"), http.StatusFound)
+}
+
+func (s *Server) handleResellerDisable(w http.ResponseWriter, r *http.Request) {
+	s.setResellerEnabled(w, r, false)
+}
+
+func (s *Server) handleResellerEnable(w http.ResponseWriter, r *http.Request) {
+	s.setResellerEnabled(w, r, true)
+}
+
+func (s *Server) handleResellerDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	username := strings.TrimSpace(r.FormValue("username"))
+	target, err := s.st.GetPanelUserByUsername(username)
+	if err != nil || target.Role != "reseller" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	allUsers, _ := s.st.ListPanelUsers()
+	for _, u := range allUsers {
+		if u.Role == "user" && u.ResellerID != nil && *u.ResellerID == target.ID {
+			http.Redirect(w, r, "/ui/resellers?error="+url.QueryEscape("cannot delete reseller with owned users"), http.StatusFound)
+			return
+		}
+	}
+	if err := s.st.DeletePanelUser(target.ID); err != nil {
+		http.Redirect(w, r, "/ui/resellers?error="+url.QueryEscape(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/ui/resellers?info="+url.QueryEscape("reseller deleted"), http.StatusFound)
+}
+
+func (s *Server) setResellerEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = r.ParseForm()
+	username := strings.TrimSpace(r.FormValue("username"))
+	target, err := s.st.GetPanelUserByUsername(username)
+	if err != nil || target.Role != "reseller" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	target.Enabled = enabled
+	if _, err := s.st.UpdatePanelUser(target); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, "/ui/resellers", http.StatusFound)
 }
 
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
@@ -1275,6 +1643,49 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------- helpers ----------------
+
+func (s *Server) canManagePanelUser(sess Session, target store.PanelUser) bool {
+	if sess.Role == "admin" {
+		return true
+	}
+	if sess.Role == "reseller" && target.Role == "user" && target.ResellerID != nil && *target.ResellerID == sess.UserID {
+		return true
+	}
+	return false
+}
+
+func (s *Server) listAssignablePackages(sess Session) ([]store.Package, error) {
+	pkgs, err := s.st.ListPackages()
+	if err != nil {
+		return nil, err
+	}
+	if sess.Role != "reseller" {
+		return pkgs, nil
+	}
+	filtered := make([]store.Package, 0, len(pkgs))
+	for _, p := range pkgs {
+		if p.CreatedBy != nil && *p.CreatedBy == sess.UserID {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *Server) userPackageMap() (map[int64]string, error) {
+	items, err := s.st.ListPanelUsers()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]string, len(items))
+	for _, u := range items {
+		up, err := s.st.GetUserPackage(u.ID)
+		if err != nil {
+			continue
+		}
+		out[u.ID] = up.Package.Name
+	}
+	return out, nil
+}
 
 func parseBool(v string, def bool) bool {
 	v = strings.TrimSpace(strings.ToLower(v))
@@ -1486,25 +1897,81 @@ const packageFormHTML = `{{define "package_form"}}
 </form>{{end}}`
 
 const usersHTML = `{{define "users"}}
-<h2>Users</h2><p><a href="/ui/users/new">New user</a></p>
-<table border="1" cellpadding="6" cellspacing="0"><tr><th>ID</th><th>Username</th><th>Enabled</th></tr>
-{{range .Items}}<tr><td>{{.ID}}</td><td>{{.Username}}</td><td>{{.Enabled}}</td></tr>{{end}}
+<h2>Users</h2>
+{{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
+{{if .Info}}<p style="color:#060">{{.Info}}</p>{{end}}
+<p><a href="/ui/users/new">New user</a></p>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>ID</th><th>Username</th><th>Enabled</th><th>Package</th><th>Owner</th><th>Actions</th></tr>
+{{range .Items}}<tr>
+<td>{{.User.ID}}</td>
+<td>{{.User.Username}}</td>
+<td>{{if .User.Enabled}}yes{{else}}no{{end}}</td>
+<td>{{if .PackageName}}{{.PackageName}}{{else}}-{{end}}</td>
+<td>{{.Owner}}</td>
+<td>
+  <a href="/ui/users/edit?username={{.User.Username}}">Edit</a>
+  {{if .User.Enabled}}
+  <form method="post" action="/ui/users/suspend" style="display:inline"><input type="hidden" name="username" value="{{.User.Username}}"><button>Suspend</button></form>
+  {{else}}
+  <form method="post" action="/ui/users/enable" style="display:inline"><input type="hidden" name="username" value="{{.User.Username}}"><button>Enable</button></form>
+  {{end}}
+  <form method="post" action="/ui/users/delete" style="display:inline" onsubmit="return confirm('Delete user {{.User.Username}}?');"><input type="hidden" name="username" value="{{.User.Username}}"><button>Delete</button></form>
+</td>
+</tr>{{end}}
 </table>{{end}}`
 
 const userFormHTML = `{{define "user_form"}}
-<h2>New user</h2>
-<form method="post" action="/ui/users/new">
-<input name="username" placeholder="username">
-<input type="password" name="password" placeholder="password">
-<button>Create</button>
+<h2>{{if eq .Mode "edit"}}Edit user{{else}}New user{{end}}</h2>
+{{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
+<form method="post" action="{{.FormAction}}">
+<table cellpadding="6">
+<tr><td>Username</td><td><input name="username" value="{{index .Form "username"}}" {{if eq .Mode "edit"}}readonly{{end}}></td></tr>
+<tr><td>Password {{if eq .Mode "edit"}}(optional reset){{end}}</td><td><input type="password" name="password"></td></tr>
+<tr><td>Enabled</td><td><label><input type="checkbox" name="enabled" value="true" {{if ne (index .Form "enabled") "false"}}checked{{end}}> enabled</label></td></tr>
+<tr><td>Package</td><td><select name="package_id"><option value="">-- none --</option>{{range .Packages}}<option value="{{.ID}}" {{if eq (printf "%d" .ID) (index $.Form "package_id")}}selected{{end}}>{{.Name}}</option>{{end}}</select></td></tr>
+{{if .IsAdmin}}<tr><td>Reseller (optional)</td><td><select name="reseller_id"><option value="">-- direct user --</option>{{range .Resellers}}<option value="{{.ID}}" {{if eq (printf "%d" .ID) (index $.Form "reseller")}}selected{{end}}>{{.Username}}</option>{{end}}</select></td></tr>{{end}}
+{{if .PanelUser}}<tr><td>System user</td><td>{{.PanelUser.SystemUser}}</td></tr><tr><td>Role</td><td>{{.PanelUser.Role}}</td></tr>{{end}}
+</table>
+<button>{{if eq .Mode "edit"}}Save{{else}}Create{{end}}</button>
 </form>{{end}}`
 
-const resellersHTML = `{{define "resellers"}}<h2>Resellers</h2><p><a href="/ui/resellers/new">New reseller</a></p>{{end}}`
-const resellerFormHTML = `{{define "reseller_form"}}<h2>New reseller</h2>{{end}}`
+const resellersHTML = `{{define "resellers"}}
+<h2>Resellers</h2>
+{{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
+{{if .Info}}<p style="color:#060">{{.Info}}</p>{{end}}
+<p><a href="/ui/resellers/new">New reseller</a></p>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>ID</th><th>Username</th><th>Enabled</th><th>Owned users</th><th>Actions</th></tr>
+{{range .Items}}<tr>
+<td>{{.ID}}</td><td>{{.Username}}</td><td>{{if .Enabled}}yes{{else}}no{{end}}</td><td>{{index $.UserCount .ID}}</td>
+<td>
+<a href="/ui/resellers/edit?username={{.Username}}">Edit</a>
+{{if .Enabled}}
+<form method="post" action="/ui/resellers/disable" style="display:inline"><input type="hidden" name="username" value="{{.Username}}"><button>Disable</button></form>
+{{else}}
+<form method="post" action="/ui/resellers/enable" style="display:inline"><input type="hidden" name="username" value="{{.Username}}"><button>Enable</button></form>
+{{end}}
+<form method="post" action="/ui/resellers/delete" style="display:inline" onsubmit="return confirm('Delete reseller {{.Username}}? This is blocked if owned users exist.');"><input type="hidden" name="username" value="{{.Username}}"><button>Delete</button></form>
+</td></tr>{{end}}
+</table>{{end}}`
+const resellerFormHTML = `{{define "reseller_form"}}
+<h2>{{if eq .Mode "edit"}}Edit reseller{{else}}New reseller{{end}}</h2>
+{{if .Error}}<p style="color:#b00">{{.Error}}</p>{{end}}
+<form method="post" action="{{.FormAction}}">
+<table cellpadding="6">
+<tr><td>Username</td><td><input name="username" value="{{index .Form "username"}}" {{if eq .Mode "edit"}}readonly{{end}}></td></tr>
+<tr><td>Password {{if eq .Mode "edit"}}(optional reset){{end}}</td><td><input type="password" name="password"></td></tr>
+<tr><td>Enabled</td><td><label><input type="checkbox" name="enabled" value="true" {{if ne (index .Form "enabled") "false"}}checked{{end}}> enabled</label></td></tr>
+<tr><td>Role</td><td>reseller</td></tr>
+</table>
+<button>{{if eq .Mode "edit"}}Save{{else}}Create{{end}}</button>
+</form>{{end}}`
 
 const sitesHTML = `{{define "sites"}}
   <h2 style="margin:0 0 10px 0;">Sites</h2>
   <p style="opacity:.8; margin-top:0;">Manage sites and apply nginx changes.</p>
+  <p><a href="/ui/sites/new">New site</a></p>
 
   <table cellpadding="8" cellspacing="0" border="1" style="border-collapse:collapse; width:100%;">
     <thead>
