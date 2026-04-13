@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -33,91 +34,290 @@ var (
 	BuildTime = "unknown"
 )
 
+func isHelpArg(s string) bool {
+	return s == "-h" || s == "--help"
+}
+
+func shouldPrintHelp(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "help" {
+		return true
+	}
+	return len(args) == 1 && isHelpArg(args[0])
+}
+
+func printHelp(args []string) {
+	if len(args) == 0 {
+		printUsage()
+		return
+	}
+	if isHelpArg(args[0]) {
+		printUsage()
+		return
+	}
+	if args[0] != "help" {
+		printUsage()
+		return
+	}
+	if len(args) == 1 {
+		printUsage()
+		return
+	}
+	switch args[1] {
+	case "site":
+		printSiteUsage()
+	case "cert":
+		printCertUsage()
+	case "panel-user":
+		printPanelUserUsage()
+	case "package":
+		printPackageUsage()
+	case "backup":
+		printBackupUsage()
+	case "restore":
+		printRestoreUsage()
+	case "admin":
+		printAdminUsage()
+	default:
+		fmt.Printf("Unknown help topic: %s\n\n", args[1])
+		printUsage()
+	}
+}
+
+func printUsage() {
+	fmt.Println("NGM CLI")
+	fmt.Println("")
+	fmt.Println("Usage:")
+	fmt.Println("  ngm [global flags] <command> [subcommand] [flags]")
+	fmt.Println("")
+	fmt.Println("Global flags:")
+	fmt.Println("  -c <path>                           Path to config.yaml (default: config.yaml)")
+	fmt.Println("  -h, --help                          Show help")
+	fmt.Println("")
+	fmt.Println("Commands:")
+	fmt.Println("  serve                               Start local UI/API server")
+	fmt.Println("  site add|edit|list|rm               Site management")
+	fmt.Println("  apply                               Apply nginx changes")
+	fmt.Println("  cert list|info|issue|renew|check    Certificate management")
+	fmt.Println("  panel-user add|list|edit|del        Manage admin/reseller/user panel users")
+	fmt.Println("  admin add|list|edit|del             Admin alias for panel-user")
+	fmt.Println("  package add|list|show|edit|del      Hosting package management")
+	fmt.Println("  backup user|reseller|all            Create backups")
+	fmt.Println("  restore --file <archive.tar.gz> [--new-user <username>]")
+	fmt.Println("")
+	fmt.Println("Roles:")
+	fmt.Println("  admin")
+	fmt.Println("  reseller")
+	fmt.Println("  user")
+	fmt.Println("")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm panel-user add --user alice --pass secret --role admin")
+	fmt.Println("  ngm admin list")
+	fmt.Println("  ngm panel-user list --role reseller")
+	fmt.Println("  ngm site add --user alice --domain example.com")
+	fmt.Println("  ngm backup user --user alice --include-certs")
+	fmt.Println("")
+	fmt.Println("Run `ngm help <command>` for detailed help.")
+}
+
+func printSiteUsage() {
+	fmt.Println("Usage: ngm site <add|edit|list|rm> [flags]")
+	fmt.Println("Subcommands: add, edit, list, rm")
+	fmt.Println("Important flags:")
+	fmt.Println("  add  --user --domain [--parent] [--mode php|proxy|static] [--php] [--webroot]")
+	fmt.Println("  edit --domain [--user] [--parent] [--mode] [--php] [--enabled true|false]")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm site add --user alice --domain example.com")
+	fmt.Println("  ngm site edit --domain example.com --enabled=false")
+	fmt.Println("  ngm site list")
+}
+
+func printCertUsage() {
+	fmt.Println("Usage: ngm cert <list|info|issue|renew|check> [flags]")
+	fmt.Println("Subcommands: list, info, issue, renew, check")
+	fmt.Println("Important flags:")
+	fmt.Println("  info  --domain <domain>")
+	fmt.Println("  issue --domain <domain> [--apply=true|false]")
+	fmt.Println("  renew [--domain <domain>] [--all] [--apply=true|false]")
+	fmt.Println("  check [--days 30]")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm cert list")
+	fmt.Println("  ngm cert issue --domain example.com")
+	fmt.Println("  ngm cert check --days 14")
+}
+
+func printPanelUserUsage() {
+	fmt.Println("Usage: ngm panel-user <add|list|edit|del> [flags]")
+	fmt.Println("Manages panel users for roles: admin, reseller, user.")
+	fmt.Println("Important flags:")
+	fmt.Println("  add  --user --pass [--role admin|reseller|user] [--enabled] [--package]")
+	fmt.Println("  list [--role admin|reseller|user] [--enabled true|false]")
+	fmt.Println("  edit --user [--pass] [--enabled true|false] [--role admin|reseller|user] [--package]")
+	fmt.Println("  del  --user")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm panel-user add --user rootpanel --pass secret --role admin")
+	fmt.Println("  ngm panel-user add --user reseller1 --pass secret --role reseller")
+	fmt.Println("  ngm panel-user add --user alice --pass secret --role user")
+}
+
+func printPackageUsage() {
+	fmt.Println("Usage: ngm package <add|list|show|edit|del> [flags]")
+	fmt.Println("Subcommands: add, list, show, edit, del")
+	fmt.Println("Important flags:")
+	fmt.Println("  add  --name <name>")
+	fmt.Println("  show --name <name>")
+	fmt.Println("  edit --name <name> [--new-name <name>]")
+	fmt.Println("  del  --name <name>")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm package add --name starter")
+	fmt.Println("  ngm package list")
+	fmt.Println("  ngm package edit --name starter --new-name basic")
+}
+
+func printBackupUsage() {
+	fmt.Println("Usage: ngm backup <user|reseller|all> [flags]")
+	fmt.Println("Scopes: user, reseller, all")
+	fmt.Println("Important flags:")
+	fmt.Println("  --user <username>        Required for user/reseller scopes")
+	fmt.Println("  --output <file.tar.gz>   Optional output path")
+	fmt.Println("  --include-certs          Include certificate files")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm backup user --user alice --include-certs")
+	fmt.Println("  ngm backup reseller --user reseller1")
+	fmt.Println("  ngm backup all")
+}
+
+func printRestoreUsage() {
+	fmt.Println("Usage: ngm restore --file <archive.tar.gz> [--new-user <username>]")
+	fmt.Println("Important flags:")
+	fmt.Println("  --file <archive.tar.gz>  Backup archive to restore (required)")
+	fmt.Println("  --new-user <username>    Override username for user-scoped backups")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm restore --file ngm-backup-user-alice-20260101T120000Z.tar.gz")
+	fmt.Println("  ngm restore --file backup.tar.gz --new-user alice2")
+}
+
+func printAdminUsage() {
+	fmt.Println("Usage: ngm admin <add|list|edit|del> [flags]")
+	fmt.Println("Thin alias around `panel-user` with role=admin expectations.")
+	fmt.Println("Important flags:")
+	fmt.Println("  add  --user --pass [--enabled] [--package]")
+	fmt.Println("  list [--enabled true|false]")
+	fmt.Println("  edit --user [--pass] [--enabled true|false] [--package]")
+	fmt.Println("  del  --user")
+	fmt.Println("Examples:")
+	fmt.Println("  ngm admin add --user rootpanel --pass secret")
+	fmt.Println("  ngm admin list")
+	fmt.Println("  ngm admin edit --user rootpanel --enabled=false")
+}
+
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	var cfgPath string
-	flag.StringVar(&cfgPath, "c", "config.yaml", "Path to config.yaml")
-	flag.Parse()
+	fs := flag.NewFlagSet("ngm", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&cfgPath, "c", "config.yaml", "Path to config.yaml")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if err == flag.ErrHelp {
+			printUsage()
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "flags: %v\n\n", err)
+		printUsage()
+		return 2
+	}
+	args := fs.Args()
+	if shouldPrintHelp(args) {
+		printHelp(args)
+		return 0
+	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return 1
 	}
 	paths := cfg.ResolvePaths()
 
 	// Open store early (for CLI commands)
 	st, err := store.Open(cfg.Storage.Driver, cfg.Storage.DSN)
 	if err != nil {
-		log.Fatalf("store: %v", err)
+		fmt.Fprintf(os.Stderr, "store: %v\n", err)
+		return 1
 	}
 	defer st.Close()
 
 	if err := st.Migrate(); err != nil {
-		log.Fatalf("store migrate: %v", err)
+		fmt.Fprintf(os.Stderr, "store migrate: %v\n", err)
+		return 1
 	}
 
-	args := flag.Args()
 	if len(args) == 0 {
 		runStatus(cfg, paths)
-		return
+		return 0
 	}
 
 	switch args[0] {
 	case "serve":
 		if err := cmdServe(st, cfg, paths); err != nil {
-			log.Fatalf("serve: %v", err)
+			fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+			return 1
 		}
 
 	case "site":
 		if err := cmdSite(st, cfg, paths, args[1:]); err != nil {
-			log.Fatalf("site: %v", err)
+			fmt.Fprintf(os.Stderr, "site: %v\n", err)
+			return 1
 		}
 	case "apply":
 		if err := cmdApply(st, cfg, paths, args[1:]); err != nil {
-			log.Fatalf("apply: %v", err)
+			fmt.Fprintf(os.Stderr, "apply: %v\n", err)
+			return 1
 		}
 
 	case "cert":
 		if err := cmdCert(st, cfg, paths, args[1:]); err != nil {
-			log.Fatalf("cert: %v", err)
+			fmt.Fprintf(os.Stderr, "cert: %v\n", err)
+			return 1
 		}
 
 	case "panel-user":
 		if err := cmdPanelUser(st, args[1:]); err != nil {
-			log.Fatalf("panel-user: %v", err)
+			fmt.Fprintf(os.Stderr, "panel-user: %v\n", err)
+			return 1
+		}
+	case "admin":
+		if err := cmdAdmin(st, args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "admin: %v\n", err)
+			return 1
 		}
 	case "package":
 		if err := cmdPackage(st, args[1:]); err != nil {
-			log.Fatalf("package: %v", err)
+			fmt.Fprintf(os.Stderr, "package: %v\n", err)
+			return 1
 		}
 	case "backup":
 		if err := cmdBackup(st, cfg, paths, args[1:]); err != nil {
-			log.Fatalf("backup: %v", err)
+			fmt.Fprintf(os.Stderr, "backup: %v\n", err)
+			return 1
 		}
 	case "restore":
 		if err := cmdRestore(st, cfg, paths, args[1:]); err != nil {
-			log.Fatalf("restore: %v", err)
+			fmt.Fprintf(os.Stderr, "restore: %v\n", err)
+			return 1
 		}
 
 	default:
-		fmt.Printf("Unknown command: %s\n", args[0])
-		fmt.Println("Commands:")
-		fmt.Println("  serve                                (start local UI on cfg.api.listen)")
-		fmt.Println("  site add --user <u> --domain <d> [--parent <root-domain>] [--mode php|proxy|static] [--php 8.3] [--webroot <path>] [--http3=true|false] [--skip-cert] [--apply-now=true|false]")
-		fmt.Println("  site edit --domain <d> [--user <u>] [--parent <root-domain>] [--mode php|proxy|static] [--php 8.3] [--webroot <path>] [--http3=true|false] [--enabled=true|false] [--apply-now=true|false]")
-		fmt.Println("  site list")
-		fmt.Println("  site rm --domain <d>")
-		fmt.Println("  apply [--domain <d>] [--all] [--dry-run] [--limit N]")
-		fmt.Println("  cert list                          (show all certificates)")
-		fmt.Println("  cert info --domain <d>             (show cert details)")
-		fmt.Println("  cert issue --domain <d>            (issue/renew certificate)")
-		fmt.Println("  cert renew [--domain <d>] [--all] (renew expiring certs)")
-		fmt.Println("  cert check [--days 30]             (check expiring soon)")
-		fmt.Println("  panel-user add|list|edit|del ...")
-		fmt.Println("  package add|list|show|edit|del ...")
-		fmt.Println("  backup user|reseller|all ...")
-		fmt.Println("  restore --file <archive.tar.gz> [--new-user <username>]")
-		os.Exit(2)
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", args[0])
+		printUsage()
+		return 2
 	}
+	return 0
 }
 
 func cmdServe(st store.SiteStore, cfg *config.Config, paths config.Paths) error {
@@ -134,139 +334,292 @@ func cmdServe(st store.SiteStore, cfg *config.Config, paths config.Paths) error 
 
 func cmdPanelUser(st store.SiteStore, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: panel-user <add|list|edit|del> ...")
+		printPanelUserUsage()
+		return nil
 	}
 	switch args[0] {
 	case "add":
-		fs := flag.NewFlagSet("panel-user add", flag.ContinueOnError)
-		user := fs.String("user", "", "Username")
-		pass := fs.String("pass", "", "Password")
-		role := fs.String("role", "admin", "Role")
-		enabled := fs.Bool("enabled", true, "Enabled")
-		reseller := fs.Int64("reseller", 0, "Reseller panel user ID")
-		pkgID := fs.Int64("package", 0, "Package ID")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if strings.TrimSpace(*user) == "" || *pass == "" {
-			return fmt.Errorf("required: --user and --pass")
-		}
-
-		passwordHash := "$SHADOW$"
-		if *role != "user" {
-			hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
-			if err != nil {
-				return err
-			}
-			passwordHash = string(hash)
-		}
-		pu, err := st.CreatePanelUser(strings.TrimSpace(*user), passwordHash, strings.TrimSpace(*role), *enabled)
-		if err != nil {
-			return err
-		}
-		if *role == "user" {
-			pu.SystemUser = pu.Username
-			if *reseller > 0 {
-				pu.ResellerID = reseller
-				pu.OwnerID = reseller
-			}
-			if _, err := st.UpdatePanelUser(pu); err != nil {
-				return err
-			}
-			home := filepath.Join("/home", pu.Username)
-			if err := users.CreateSystemUser(pu.Username, home); err != nil {
-				return err
-			}
-			if err := users.SetSystemPassword(pu.Username, *pass); err != nil {
-				return err
-			}
-		}
-		if *pkgID > 0 {
-			if err := st.AssignPackage(pu.ID, *pkgID, pu.ID); err != nil {
-				return err
-			}
-		}
-		fmt.Println("OK: panel user saved:", pu.Username)
-		return nil
+		return cmdPanelUserAdd(st, args[1:], "")
 	case "list":
-		items, err := st.ListPanelUsers()
-		if err != nil {
-			return err
-		}
-		for _, u := range items {
-			fmt.Printf("%d\t%s\t%s\tenabled=%v\n", u.ID, u.Username, u.Role, u.Enabled)
-		}
-		return nil
+		return cmdPanelUserList(st, args[1:], "")
 	case "edit":
-		fs := flag.NewFlagSet("panel-user edit", flag.ContinueOnError)
-		user := fs.String("user", "", "Username")
-		pass := fs.String("pass", "", "Password")
-		enabled := fs.String("enabled", "", "true|false")
-		pkgID := fs.Int64("package", 0, "Package ID")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *user == "" {
-			return fmt.Errorf("--user is required")
-		}
-		pu, err := st.GetPanelUserByUsername(*user)
-		if err != nil {
-			return err
-		}
-		if *enabled != "" {
-			pu.Enabled = strings.EqualFold(*enabled, "true")
-		}
-		if *pass != "" {
-			if pu.Role == "user" {
-				if err := users.SetSystemPassword(pu.SystemUser, *pass); err != nil {
-					return err
-				}
-				pu.PasswordHash = "$SHADOW$"
-			} else {
-				hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
-				if err != nil {
-					return err
-				}
-				pu.PasswordHash = string(hash)
-			}
-		}
-		if _, err := st.UpdatePanelUser(pu); err != nil {
-			return err
-		}
-		if *pkgID > 0 {
-			if err := st.AssignPackage(pu.ID, *pkgID, pu.ID); err != nil {
-				return err
-			}
-		}
-		fmt.Println("OK: panel user updated:", pu.Username)
-		return nil
+		return cmdPanelUserEdit(st, args[1:], "", false)
 	case "del":
-		fs := flag.NewFlagSet("panel-user del", flag.ContinueOnError)
-		user := fs.String("user", "", "Username")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		pu, err := st.GetPanelUserByUsername(*user)
-		if err != nil {
-			return err
-		}
-		_ = st.UnassignPackage(pu.ID)
-		if err := st.DeletePanelUser(pu.ID); err != nil {
-			return err
-		}
-		if pu.Role == "user" && pu.SystemUser != "" {
-			_ = users.DeleteSystemUser(pu.SystemUser)
-		}
-		fmt.Println("OK: panel user deleted:", pu.Username)
+		return cmdPanelUserDel(st, args[1:], "", false)
+	case "help", "-h", "--help":
+		printPanelUserUsage()
 		return nil
 	default:
 		return fmt.Errorf("unknown panel-user subcommand: %s", args[0])
 	}
 }
 
+func cmdAdmin(st store.SiteStore, args []string) error {
+	if len(args) == 0 {
+		printAdminUsage()
+		return nil
+	}
+	switch args[0] {
+	case "add":
+		return cmdPanelUserAdd(st, args[1:], "admin")
+	case "list":
+		return cmdPanelUserList(st, args[1:], "admin")
+	case "edit":
+		return cmdPanelUserEdit(st, args[1:], "admin", true)
+	case "del":
+		return cmdPanelUserDel(st, args[1:], "admin", true)
+	case "help", "-h", "--help":
+		printAdminUsage()
+		return nil
+	default:
+		return fmt.Errorf("unknown admin subcommand: %s", args[0])
+	}
+}
+
+func cmdPanelUserAdd(st store.SiteStore, args []string, forcedRole string) error {
+	fs := flag.NewFlagSet("panel-user add", flag.ContinueOnError)
+	user := fs.String("user", "", "Username")
+	pass := fs.String("pass", "", "Password")
+	role := fs.String("role", "admin", "Role (admin|reseller|user)")
+	enabled := fs.Bool("enabled", true, "Enabled")
+	reseller := fs.Int64("reseller", 0, "Reseller panel user ID")
+	pkgID := fs.Int64("package", 0, "Package ID")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*user) == "" || *pass == "" {
+		return fmt.Errorf("required: --user and --pass")
+	}
+
+	finalRole := strings.ToLower(strings.TrimSpace(*role))
+	if forcedRole != "" {
+		finalRole = forcedRole
+	}
+	if err := validatePanelRole(finalRole); err != nil {
+		return err
+	}
+
+	passwordHash := "$SHADOW$"
+	if finalRole != "user" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+		passwordHash = string(hash)
+	}
+	pu, err := st.CreatePanelUser(strings.TrimSpace(*user), passwordHash, finalRole, *enabled)
+	if err != nil {
+		return err
+	}
+	if finalRole == "user" {
+		pu.SystemUser = pu.Username
+		if *reseller > 0 {
+			pu.ResellerID = reseller
+			pu.OwnerID = reseller
+		}
+		if _, err := st.UpdatePanelUser(pu); err != nil {
+			return err
+		}
+		home := filepath.Join("/home", pu.Username)
+		if err := users.CreateSystemUser(pu.Username, home); err != nil {
+			return err
+		}
+		if err := users.SetSystemPassword(pu.Username, *pass); err != nil {
+			return err
+		}
+	}
+	if *pkgID > 0 {
+		if err := st.AssignPackage(pu.ID, *pkgID, pu.ID); err != nil {
+			return err
+		}
+	}
+	fmt.Println("OK: panel user saved:", pu.Username)
+	return nil
+}
+
+func cmdPanelUserList(st store.SiteStore, args []string, forcedRole string) error {
+	fs := flag.NewFlagSet("panel-user list", flag.ContinueOnError)
+	role := fs.String("role", "", "Filter by role: admin|reseller|user")
+	enabled := fs.String("enabled", "", "Filter by enabled: true|false")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	roleFilter := strings.ToLower(strings.TrimSpace(*role))
+	if forcedRole != "" {
+		roleFilter = forcedRole
+	}
+	if roleFilter != "" {
+		if err := validatePanelRole(roleFilter); err != nil {
+			return err
+		}
+	}
+	var enabledFilter *bool
+	if strings.TrimSpace(*enabled) != "" {
+		v, err := parseBoolArg(*enabled)
+		if err != nil {
+			return err
+		}
+		enabledFilter = &v
+	}
+
+	items, err := st.ListPanelUsers()
+	if err != nil {
+		return err
+	}
+	for _, u := range items {
+		if roleFilter != "" && u.Role != roleFilter {
+			continue
+		}
+		if enabledFilter != nil && u.Enabled != *enabledFilter {
+			continue
+		}
+		fmt.Printf("%d\t%s\t%s\tenabled=%v\n", u.ID, u.Username, u.Role, u.Enabled)
+	}
+	return nil
+}
+
+func cmdPanelUserEdit(st store.SiteStore, args []string, forcedRole string, requireExistingRole bool) error {
+	fs := flag.NewFlagSet("panel-user edit", flag.ContinueOnError)
+	user := fs.String("user", "", "Username")
+	pass := fs.String("pass", "", "Password")
+	enabled := fs.String("enabled", "", "true|false")
+	role := fs.String("role", "", "Role: admin|reseller|user")
+	pkgID := fs.Int64("package", 0, "Package ID")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *user == "" {
+		return fmt.Errorf("--user is required")
+	}
+	pu, err := st.GetPanelUserByUsername(*user)
+	if err != nil {
+		return err
+	}
+	if requireExistingRole && pu.Role != forcedRole {
+		return fmt.Errorf("panel user %q is role=%s (expected %s)", pu.Username, pu.Role, forcedRole)
+	}
+	if *enabled != "" {
+		v, err := parseBoolArg(*enabled)
+		if err != nil {
+			return err
+		}
+		pu.Enabled = v
+	}
+
+	targetRole := pu.Role
+	if strings.TrimSpace(*role) != "" {
+		targetRole = strings.ToLower(strings.TrimSpace(*role))
+	}
+	if forcedRole != "" {
+		targetRole = forcedRole
+	}
+	if err := validatePanelRole(targetRole); err != nil {
+		return err
+	}
+	if pu.Role != targetRole {
+		if pu.Role == "user" && targetRole != "user" {
+			return fmt.Errorf("role transition %s -> %s is not supported by this patch; user system accounts are preserved", pu.Role, targetRole)
+		}
+		if pu.Role != "user" && targetRole == "user" {
+			systemUser := strings.TrimSpace(pu.SystemUser)
+			if systemUser == "" {
+				systemUser = pu.Username
+			}
+			if !users.UserExists(systemUser) {
+				return fmt.Errorf("cannot change %s -> user for %q: linux account %q does not exist", pu.Role, pu.Username, systemUser)
+			}
+			pu.SystemUser = systemUser
+			pu.PasswordHash = "$SHADOW$"
+		}
+		pu.Role = targetRole
+	}
+
+	if *pass != "" {
+		if pu.Role == "user" {
+			sysUser := strings.TrimSpace(pu.SystemUser)
+			if sysUser == "" {
+				sysUser = pu.Username
+			}
+			if err := users.SetSystemPassword(sysUser, *pass); err != nil {
+				return err
+			}
+			pu.SystemUser = sysUser
+			pu.PasswordHash = "$SHADOW$"
+		} else {
+			hash, err := bcrypt.GenerateFromPassword([]byte(*pass), bcrypt.DefaultCost)
+			if err != nil {
+				return err
+			}
+			pu.PasswordHash = string(hash)
+		}
+	}
+	if _, err := st.UpdatePanelUser(pu); err != nil {
+		return err
+	}
+	if *pkgID > 0 {
+		if err := st.AssignPackage(pu.ID, *pkgID, pu.ID); err != nil {
+			return err
+		}
+	}
+	fmt.Println("OK: panel user updated:", pu.Username)
+	return nil
+}
+
+func cmdPanelUserDel(st store.SiteStore, args []string, forcedRole string, requireExistingRole bool) error {
+	fs := flag.NewFlagSet("panel-user del", flag.ContinueOnError)
+	user := fs.String("user", "", "Username")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*user) == "" {
+		return fmt.Errorf("--user is required")
+	}
+	pu, err := st.GetPanelUserByUsername(*user)
+	if err != nil {
+		return err
+	}
+	if requireExistingRole && pu.Role != forcedRole {
+		return fmt.Errorf("panel user %q is role=%s (expected %s)", pu.Username, pu.Role, forcedRole)
+	}
+	_ = st.UnassignPackage(pu.ID)
+	if err := st.DeletePanelUser(pu.ID); err != nil {
+		return err
+	}
+	if pu.Role == "user" && pu.SystemUser != "" {
+		_ = users.DeleteSystemUser(pu.SystemUser)
+	}
+	fmt.Println("OK: panel user deleted:", pu.Username)
+	return nil
+}
+
+func parseBoolArg(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean value %q, expected true|false", v)
+	}
+}
+
+func validatePanelRole(role string) error {
+	switch role {
+	case "admin", "reseller", "user":
+		return nil
+	default:
+		return fmt.Errorf("invalid role %q, expected admin|reseller|user", role)
+	}
+}
+
 func cmdPackage(st store.SiteStore, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: package <add|list|show|edit|del>")
+		printPackageUsage()
+		return nil
+	}
+	if isHelpArg(args[0]) || args[0] == "help" {
+		printPackageUsage()
+		return nil
 	}
 	switch args[0] {
 	case "list":
@@ -381,7 +734,12 @@ func runStatus(cfg *config.Config, paths config.Paths) {
 
 func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: site <add|list|rm> ...")
+		printSiteUsage()
+		return nil
+	}
+	if isHelpArg(args[0]) || args[0] == "help" {
+		printSiteUsage()
+		return nil
 	}
 
 	core, err := app.New(cfg, paths, st)
@@ -566,7 +924,12 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 
 func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: cert <list|info|issue|renew|check> ...")
+		printCertUsage()
+		return nil
+	}
+	if isHelpArg(args[0]) || args[0] == "help" {
+		printCertUsage()
+		return nil
 	}
 
 	core, err := app.New(cfg, paths, st)
@@ -1068,7 +1431,12 @@ func inferUserFromWebroot(homeRoot, webroot string) (string, bool) {
 
 func cmdBackup(st store.SiteStore, cfg *config.Config, paths config.Paths, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: backup <user|reseller|all> [flags]")
+		printBackupUsage()
+		return nil
+	}
+	if isHelpArg(args[0]) || args[0] == "help" {
+		printBackupUsage()
+		return nil
 	}
 	sub := args[0]
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
@@ -1132,6 +1500,10 @@ func cmdRestore(st store.SiteStore, cfg *config.Config, paths config.Paths, args
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	file := fs.String("file", "", "Backup file")
 	newUser := fs.String("new-user", "", "Override username for user-scoped backup")
+	if len(args) > 0 && (isHelpArg(args[0]) || args[0] == "help") {
+		printRestoreUsage()
+		return nil
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
