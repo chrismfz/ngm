@@ -151,8 +151,8 @@ yaml_read_under_section() {
         value=$0
         sub("^[[:space:]]+" key ":[[:space:]]*", "", value)
         value=trim(value)
-        gsub(/^\"/, "", value)
-        gsub(/\"$/, "", value)
+        gsub(/^"/, "", value)
+        gsub(/"$/, "", value)
         print value
         exit
       }
@@ -193,6 +193,7 @@ resolve_runtime_from_config() {
 join_under_root() {
   local root="$1"
   local path="$2"
+  root="${root%/}"
   if [[ "$path" == /* ]]; then
     printf '%s\n' "$path"
   else
