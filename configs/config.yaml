@@ -1,112 +1,59 @@
-# NGM configuration (example)
-# Copy to config.yaml and adjust paths/secrets.
-
 api:
-  # Bind address for the management API.
-  # Recommended: bind to 127.0.0.1 and front it with your own reverse proxy/auth if needed.
   listen: "0.0.0.0:9601"
   hostname: ""
-
-  # One or more bearer tokens accepted by the API.
-  # Send as: Authorization: Bearer <token>
   tokens:
     - "change-me-please"
-
-  # CIDR allowlist for client IPs (management plane).
   allow_ips:
     - "127.0.0.1/32"
     - "10.0.0.0/8"
     - "2.85.0.0/16"
 
 nginx:
-  # Root of your custom Nginx installation.
   root: "/etc/nginx/"
-
-  # Main nginx.conf (relative to root).
   main_conf: "nginx.conf"
-
-  # Directory where generated vhost files are written (relative to root).
   sites_dir: "conf/sites"
-
-  # Path to the nginx binary (relative to root).
   bin: "/usr/sbin/nginx"
-  # systemd service unit name (used when apply.reload_mode=systemd).
   service_name: "nginx"
-  # Root directory for nginx cache data (absolute path).
   cache_root: "/var/cache/nginx"
+
+  # keep user nginx, but you want runtime group alignment with nobody
   user: "nginx"
   group: "nobody"
 
   apply:
-    # Staging directory used for atomic generation/apply (relative to nginx.root).
     staging_dir: "conf/.staging"
-
-    # Keep last-known-good configs here for rollback (relative to nginx.root).
     backup_dir: "conf/.backup"
-
-    # If true, run `nginx -t` before reloading.
     test_before_reload: true
-
-    # Reload mode: "signal" (nginx -s reload) or "systemd" (systemctl reload nginx)
     reload_mode: "signal"
 
 certs:
-  # MVP mode uses certbot execution (HTTP-01 webroot).
   mode: "certbot"
-
-  # Email used for Let's Encrypt registration.
   email: "admin@myipnetworks.com"
-
-  # Webroot used for HTTP-01 challenge files.
   webroot: "/var/www/html"
-
-  # LetsEncrypt live certs directory.
   letsencrypt_live: "/etc/letsencrypt/live"
-
-  # Optional: certbot binary override
   certbot_bin: "certbot"
 
 phpfpm:
-  # Default PHP version used when a domain does not specify one explicitly.
   default_version: "8.3"
-
-  # Known PHP versions and how to manage them (Sury-style coexistence).
   versions:
-    "8.4":
-      pools_dir: "/etc/php/8.4/fpm/pool.d"
-      service: "php84-php-fpm"
-      sock_dir: "/run/php"
     "8.3":
-      pools_dir: "/etc/php/8.3/fpm/pool.d"
+      pools_dir: "/etc/opt/remi/php83/php-fpm.d"
       service: "php83-php-fpm"
-      sock_dir: "/run/php"
+      sock_dir: "/var/opt/remi/php83/run/php-fpm"
 
 hosting:
-  # Base directory for system users' home.
   home_root: "/home"
-
-  # Under each user's home:
-  # /home/<user>/<sites_root_name>/<domain>/public
   sites_root_name: "sites"
 
-  # Group nginx runs as
+  # this must match the group nginx uses to traverse/read site files
   web_group: "nobody"
 
 security:
-  # Append-only audit log path.
   audit_log: "/var/log/ngm/audit.log"
 
 storage:
-  # Storage backend driver: sqlite (default) or mysql.
   driver: "sqlite"
-
-  # DSN for selected driver.
-  # sqlite: absolute path to DB file
-  # mysql : user:pass@tcp(127.0.0.1:3306)/ngm?parseTime=true
   dsn: "/var/lib/ngm/ngm.db"
-
-  # SQLite database file (state store).
-  # Backward-compatibility alias; if dsn is empty this value is used.
   sqlite_path: "/var/lib/ngm/ngm.db"
 
 dns:
