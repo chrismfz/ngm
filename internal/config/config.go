@@ -29,13 +29,14 @@ type APIConfig struct {
 }
 
 type NginxConfig struct {
-	Root     string           `yaml:"root"`
-	MainConf string           `yaml:"main_conf"`
-	SitesDir string           `yaml:"sites_dir"`
-	Bin      string           `yaml:"bin"`
-	User     string           `yaml:"user"`
-	Group    string           `yaml:"group"`
-	Apply    NginxApplyConfig `yaml:"apply"`
+	Root      string           `yaml:"root"`
+	MainConf  string           `yaml:"main_conf"`
+	SitesDir  string           `yaml:"sites_dir"`
+	Bin       string           `yaml:"bin"`
+	CacheRoot string           `yaml:"cache_root"`
+	User      string           `yaml:"user"`
+	Group     string           `yaml:"group"`
+	Apply     NginxApplyConfig `yaml:"apply"`
 }
 
 type NginxApplyConfig struct {
@@ -115,6 +116,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Nginx.Bin == "" {
 		c.Nginx.Bin = "sbin/nginx"
+	}
+	if c.Nginx.CacheRoot == "" {
+		c.Nginx.CacheRoot = "/var/cache/nginx"
 	}
 	if c.Nginx.User == "" {
 		c.Nginx.User = "www-data"
@@ -253,12 +257,16 @@ func (c *Config) Validate() error {
 // paths//
 type Paths struct {
 	// Nginx
-	NginxRoot      string
-	NginxBin       string
-	NginxMainConf  string
-	NginxSitesDir  string
-	NginxStageDir  string
-	NginxBackupDir string
+	NginxRoot                string
+	NginxBin                 string
+	NginxMainConf            string
+	NginxSitesDir            string
+	NginxStageDir            string
+	NginxBackupDir           string
+	NginxCacheRoot           string
+	NginxPHPFastCGICacheDir  string
+	NginxProxyMicroCacheDir  string
+	NginxProxyStaticCacheDir string
 
 	// Certs
 	CertbotBin      string
@@ -270,12 +278,16 @@ func (c *Config) ResolvePaths() Paths {
 	root := c.Nginx.Root
 
 	return Paths{
-		NginxRoot:      root,
-		NginxBin:       absOrJoin(root, c.Nginx.Bin),
-		NginxMainConf:  absOrJoin(root, c.Nginx.MainConf),
-		NginxSitesDir:  absOrJoin(root, c.Nginx.SitesDir),
-		NginxStageDir:  absOrJoin(root, c.Nginx.Apply.StagingDir),
-		NginxBackupDir: absOrJoin(root, c.Nginx.Apply.BackupDir),
+		NginxRoot:                root,
+		NginxBin:                 absOrJoin(root, c.Nginx.Bin),
+		NginxMainConf:            absOrJoin(root, c.Nginx.MainConf),
+		NginxSitesDir:            absOrJoin(root, c.Nginx.SitesDir),
+		NginxStageDir:            absOrJoin(root, c.Nginx.Apply.StagingDir),
+		NginxBackupDir:           absOrJoin(root, c.Nginx.Apply.BackupDir),
+		NginxCacheRoot:           c.Nginx.CacheRoot,
+		NginxPHPFastCGICacheDir:  filepath.Join(c.Nginx.CacheRoot, "php"),
+		NginxProxyMicroCacheDir:  filepath.Join(c.Nginx.CacheRoot, "proxy_micro"),
+		NginxProxyStaticCacheDir: filepath.Join(c.Nginx.CacheRoot, "proxy_static"),
 
 		CertbotBin:      c.Certs.CertbotBin, // can be PATH lookup
 		ACMEWebroot:     c.Certs.Webroot,
