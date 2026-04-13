@@ -96,6 +96,25 @@ func (s *Store) GetUserByID(id int64) (store.User, error) {
 	return u, nil
 }
 
+func (s *Store) ListUsers() ([]store.User, error) {
+	rows, err := s.db.Query(`SELECT id, username, home_dir, created_at FROM users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.User
+	for rows.Next() {
+		var u store.User
+		var created string
+		if err := rows.Scan(&u.ID, &u.Username, &u.HomeDir, &created); err != nil {
+			return nil, err
+		}
+		u.CreatedAt = parseTime(created)
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpsertSite(site store.Site) (store.Site, error) {
 	if site.Domain == "" || site.UserID == 0 || site.Webroot == "" {
 		return store.Site{}, fmt.Errorf("domain, user_id, webroot are required")

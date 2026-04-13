@@ -16,6 +16,7 @@ import (
 
 	"mynginx/internal/app"
 	"mynginx/internal/auth"
+	"mynginx/internal/backup"
 	"mynginx/internal/config"
 	"mynginx/internal/store"
 	"mynginx/internal/users"
@@ -118,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ui/users/delete", s.requireAuth(s.requireRole("admin", "reseller")(s.handleUserDelete)))
 	mux.HandleFunc("/ui/resellers", s.requireAuth(s.requireRole("admin")(s.handleResellers)))
 	mux.HandleFunc("/ui/resellers/new", s.requireAuth(s.requireRole("admin")(s.handleResellerNew)))
+	mux.HandleFunc("/ui/backup", s.requireAuth(s.handleBackup))
 
 	return mux
 }
@@ -1206,6 +1208,72 @@ func (s *Server) handleResellerNew(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "New Reseller", "reseller_form", map[string]any{})
 }
 
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sess, _ := s.sessionFromCtx(r)
+	scope := backup.BackupScope(strings.TrimSpace(r.URL.Query().Get("scope")))
+	if scope == "" {
+		if sess.Role == "user" {
+			scope = backup.ScopeUser
+		} else if sess.Role == "reseller" {
+			scope = backup.ScopeReseller
+		} else {
+			scope = backup.ScopeAll
+		}
+	}
+	user := strings.TrimSpace(r.URL.Query().Get("user"))
+	if user == "" {
+		user = sess.Username
+	}
+	switch scope {
+	case backup.ScopeAll:
+		if sess.Role != "admin" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	case backup.ScopeReseller:
+		if sess.Role != "admin" && !(sess.Role == "reseller" && user == sess.Username) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	case backup.ScopeUser:
+		if sess.Role == "user" && user != sess.Username {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if sess.Role == "reseller" {
+			pu, err := s.st.GetPanelUserByUsername(user)
+			if err != nil || pu.ResellerID == nil || *pu.ResellerID != sess.UserID {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
+	default:
+		http.Error(w, "invalid scope", http.StatusBadRequest)
+		return
+	}
+	includeCerts := parseBool(r.URL.Query().Get("include_certs"), false)
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"ngm-backup-"+string(scope)+"-"+user+".tar.gz\"")
+	host, _ := os.Hostname()
+	if _, err := backup.Create(s.st, backup.BackupOptions{
+		Scope:        scope,
+		Username:     user,
+		IncludeCerts: includeCerts,
+		NodeID:       host,
+		Driver:       s.cfg.Storage.Driver,
+		HomeRoot:     s.cfg.Hosting.HomeRoot,
+		CertsRoot:    s.paths.LetsEncryptLive,
+		Now:          time.Now().UTC(),
+	}, w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 // ---------------- helpers ----------------
 
 func parseBool(v string, def bool) bool {
@@ -1349,14 +1417,17 @@ const menuHTML = `{{define "menu"}}
       <a href="/ui/sites">Sites</a>
       <a href="/ui/certs">Certificates</a>
       <a href="/ui/apply">Apply</a>
+      <a href="/ui/backup">Backups</a>
     {{else if eq .Session.Role "reseller"}}
       <a href="/ui/users">My Users</a>
       <a href="/ui/packages">Packages</a>
       <a href="/ui/sites">Sites</a>
       <a href="/ui/certs">Certificates</a>
+      <a href="/ui/backup">Backups</a>
     {{else}}
       <a href="/ui/sites">My Domains</a>
       <a href="/ui/certs">Certificates</a>
+      <a href="/ui/backup">Backup</a>
     {{end}}
 
     <div style="margin-left:auto; display:flex; gap:10px; align-items:center;">

@@ -63,6 +63,9 @@ func (s *Store) GetUserByUsername(username string) (store.User, error) {
 func (s *Store) GetUserByID(id int64) (store.User, error) {
 	return store.User{}, store.ErrNotImplemented
 }
+func (s *Store) ListUsers() ([]store.User, error) {
+	return nil, store.ErrNotImplemented
+}
 func (s *Store) UpsertSite(site store.Site) (store.Site, error) {
 	return store.Site{}, store.ErrNotImplemented
 }

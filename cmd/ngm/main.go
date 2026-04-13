@@ -21,6 +21,7 @@ import (
 	"mynginx/internal/util"
 
 	"mynginx/internal/app"
+	"mynginx/internal/backup"
 
 	"mynginx/internal/web"
 
@@ -88,6 +89,14 @@ func main() {
 		if err := cmdPackage(st, args[1:]); err != nil {
 			log.Fatalf("package: %v", err)
 		}
+	case "backup":
+		if err := cmdBackup(st, cfg, paths, args[1:]); err != nil {
+			log.Fatalf("backup: %v", err)
+		}
+	case "restore":
+		if err := cmdRestore(st, cfg, paths, args[1:]); err != nil {
+			log.Fatalf("restore: %v", err)
+		}
 
 	default:
 		fmt.Printf("Unknown command: %s\n", args[0])
@@ -105,6 +114,8 @@ func main() {
 		fmt.Println("  cert check [--days 30]             (check expiring soon)")
 		fmt.Println("  panel-user add|list|edit|del ...")
 		fmt.Println("  package add|list|show|edit|del ...")
+		fmt.Println("  backup user|reseller|all ...")
+		fmt.Println("  restore --file <archive.tar.gz> [--new-user <username>]")
 		os.Exit(2)
 	}
 }
@@ -1053,4 +1064,99 @@ func inferUserFromWebroot(homeRoot, webroot string) (string, bool) {
 		return "", false
 	}
 	return parts[0], true
+}
+
+func cmdBackup(st store.SiteStore, cfg *config.Config, paths config.Paths, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: backup <user|reseller|all> [flags]")
+	}
+	sub := args[0]
+	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
+	username := fs.String("user", "", "Username for user/reseller scope")
+	output := fs.String("output", "", "Output tar.gz file")
+	includeCerts := fs.Bool("include-certs", false, "Include certificate files")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	scope := backup.ScopeAll
+	switch sub {
+	case "user":
+		scope = backup.ScopeUser
+		if strings.TrimSpace(*username) == "" {
+			return fmt.Errorf("--user is required for backup user")
+		}
+	case "reseller":
+		scope = backup.ScopeReseller
+		if strings.TrimSpace(*username) == "" {
+			return fmt.Errorf("--user is required for backup reseller")
+		}
+	case "all":
+		scope = backup.ScopeAll
+	default:
+		return fmt.Errorf("unknown backup scope: %s", sub)
+	}
+	outPath := strings.TrimSpace(*output)
+	if outPath == "" {
+		ts := time.Now().UTC().Format("20060102T150405Z")
+		subject := "all"
+		if scope != backup.ScopeAll {
+			subject = strings.TrimSpace(*username)
+		}
+		outPath = fmt.Sprintf("ngm-backup-%s-%s-%s.tar.gz", scope, subject, ts)
+	}
+	f, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	host, _ := os.Hostname()
+	_, err = backup.Create(st, backup.BackupOptions{
+		Scope:        scope,
+		Username:     strings.TrimSpace(*username),
+		IncludeCerts: *includeCerts,
+		NodeID:       host,
+		Driver:       cfg.Storage.Driver,
+		HomeRoot:     cfg.Hosting.HomeRoot,
+		CertsRoot:    paths.LetsEncryptLive,
+		Now:          time.Now().UTC(),
+	}, f)
+	if err != nil {
+		return err
+	}
+	fmt.Println("Backup created:", outPath)
+	return nil
+}
+
+func cmdRestore(st store.SiteStore, cfg *config.Config, paths config.Paths, args []string) error {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	file := fs.String("file", "", "Backup file")
+	newUser := fs.String("new-user", "", "Override username for user-scoped backup")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*file) == "" {
+		return fmt.Errorf("--file is required")
+	}
+	core, err := app.New(cfg, paths, st)
+	if err != nil {
+		return err
+	}
+	res, err := backup.Restore(st, backup.RestoreOptions{
+		FilePath:  strings.TrimSpace(*file),
+		NewUser:   strings.TrimSpace(*newUser),
+		HomeRoot:  cfg.Hosting.HomeRoot,
+		CertsRoot: paths.LetsEncryptLive,
+	}, func() error {
+		_, err := core.Apply(context.Background(), app.ApplyRequest{All: true})
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Restore complete: users=%d sites=%d files=%d certs=%d warnings=%d\n", res.Users, res.Sites, res.SiteFileCount, res.CertFileCount, len(res.Warnings))
+	for _, w := range res.Warnings {
+		fmt.Println("WARN:", w)
+	}
+	return nil
 }
