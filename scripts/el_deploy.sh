@@ -245,7 +245,7 @@ prepare_dirs() {
     "$NGINX_CACHE_ROOT/php" \
     "$NGINX_CACHE_ROOT/proxy_micro" \
     "$NGINX_CACHE_ROOT/proxy_static" || true
-
+usermod -aG nobody nginx
   log "prepare_dirs created/validated ${#seen[@]} unique paths"
   for path in "${!seen[@]}"; do
     printf '  - %s\n' "$path"
