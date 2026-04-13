@@ -113,7 +113,7 @@ dns:
   enabled: false
   provider: "bind"
   default_template: "default"
-  default_ipv4: "203.0.113.10"
+  default_ipv4: "84.54.49.31"
   default_ipv6: ""
 
   bind:
