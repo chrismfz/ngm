@@ -36,7 +36,7 @@ http {
         listen [::]:80 default_server;
         server_name _;
 
-        root {{ .ACMEWebroot }};
+        root /var/www/html;
 
         location ^~ /.well-known/acme-challenge/ {
             default_type text/plain;
