@@ -19,16 +19,16 @@ api:
 
 nginx:
   # Root of your custom Nginx installation.
-  root: "/usr/local/openresty/nginx"
+  root: "/etc/nginx/"
 
   # Main nginx.conf (relative to root).
-  main_conf: "conf/nginx.conf"
+  main_conf: "nginx.conf"
 
   # Directory where generated vhost files are written (relative to root).
   sites_dir: "conf/sites"
 
   # Path to the nginx binary (relative to root).
-  bin: "sbin/nginx"
+  bin: "/usr/sbin/nginx"
   # Root directory for nginx cache data (absolute path).
   cache_root: "/var/cache/nginx"
   user: "www-data"
@@ -55,7 +55,7 @@ certs:
   email: "admin@myipnetworks.com"
 
   # Webroot used for HTTP-01 challenge files.
-  webroot: "/usr/local/openresty/nginx/html"
+  webroot: "/var/www/html"
 
   # LetsEncrypt live certs directory.
   letsencrypt_live: "/etc/letsencrypt/live"
@@ -71,11 +71,11 @@ phpfpm:
   versions:
     "8.4":
       pools_dir: "/etc/php/8.4/fpm/pool.d"
-      service: "php8.4-fpm"
+      service: "php84-fpm"
       sock_dir: "/run/php"
     "8.3":
       pools_dir: "/etc/php/8.3/fpm/pool.d"
-      service: "php8.3-fpm"
+      service: "php83-fpm"
       sock_dir: "/run/php"
 
 hosting:
@@ -86,8 +86,8 @@ hosting:
   # /home/<user>/<sites_root_name>/<domain>/public
   sites_root_name: "sites"
 
-  # Group nginx runs as (common on Debian/Ubuntu).
-  web_group: "www-data"
+  # Group nginx runs as
+  web_group: "nobody"
 
 security:
   # Append-only audit log path.
