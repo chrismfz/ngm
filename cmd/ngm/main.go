@@ -128,14 +128,39 @@ func printUsage() {
 
 func printSiteUsage() {
 	fmt.Println("Usage: ngm site <add|edit|list|rm> [flags]")
-	fmt.Println("Subcommands: add, edit, list, rm")
+	fmt.Println("Subcommands:")
+	fmt.Println("  add     Create a site (root domain or subdomain)")
+	fmt.Println("  edit    Update owner/mode/php/webroot/http3/enabled")
+	fmt.Println("  list    List sites with parent, mode, state, php and webroot")
+	fmt.Println("  rm      Disable a site (soft remove; config removed on apply)")
+	fmt.Println("")
+	fmt.Println("Domain model:")
+	fmt.Println("  root domain: ngm site add --user alice --domain example.com")
+	fmt.Println("  subdomain : ngm site add --user alice --domain blog.example.com --parent example.com")
+	fmt.Println("")
+	fmt.Println("Modes:")
+	fmt.Println("  php    = php-fpm upstream for the selected --php version")
+	fmt.Println("  proxy  = reverse proxy (add targets during create or later in UI Targets page)")
+	fmt.Println("  static = static files only (no php-fpm pool)")
+	fmt.Println("")
 	fmt.Println("Important flags:")
 	fmt.Println("  add  --user --domain [--parent] [--mode php|proxy|static] [--php] [--webroot]")
+	fmt.Println("       [--http3] [--provision] [--apply-now] [--skip-cert]")
+	fmt.Println("       [--client-max-body-size] [--php-time-read] [--php-time-send]")
 	fmt.Println("  edit --domain [--user] [--parent] [--mode] [--php] [--enabled true|false]")
+	fmt.Println("       [--http3 true|false] [--apply-now] [--webroot] [--client-max-body-size]")
+	fmt.Println("")
 	fmt.Println("Examples:")
-	fmt.Println("  ngm site add --user alice --domain example.com")
+	fmt.Println("  ngm site add --user alice --domain example.com --mode php --php 8.3")
+	fmt.Println("  ngm site add --user alice --domain blog.example.com --parent example.com --mode php --php 8.3")
+	fmt.Println("  ngm site add --user alice --domain app.example.com --mode proxy --skip-cert --apply-now=false")
+	fmt.Println("  ngm site add --user alice --domain static.example.com --mode static --skip-cert")
 	fmt.Println("  ngm site edit --domain example.com --enabled=false")
 	fmt.Println("  ngm site list")
+	fmt.Println("")
+	fmt.Println("Apply/cert guidance:")
+	fmt.Println("  If DNS/webroot is not ready yet, prefer --skip-cert or --apply-now=false.")
+	fmt.Println("  For proxy mode, ensure at least one target exists before apply-now.")
 }
 
 func printCertUsage() {
@@ -804,7 +829,15 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
 			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
 		)
+		fs.Usage = func() {
+			fmt.Println("Usage: ngm site add --user <username> --domain <domain> [flags]")
+			fmt.Println("Flags:")
+			fs.PrintDefaults()
+		}
 		if err := fs.Parse(args[1:]); err != nil {
+			if err == flag.ErrHelp {
+				return nil
+			}
 			return err
 		}
 		if *user == "" || *domain == "" {
@@ -903,7 +936,15 @@ func cmdSite(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 			phpRead   = fs.String("php-time-read", "", "Nginx fastcgi_read_timeout (e.g. 60s, 300s)")
 			phpSend   = fs.String("php-time-send", "", "Nginx fastcgi_send_timeout (e.g. 60s, 300s)")
 		)
+		fs.Usage = func() {
+			fmt.Println("Usage: ngm site edit --domain <domain> [flags]")
+			fmt.Println("Flags:")
+			fs.PrintDefaults()
+		}
 		if err := fs.Parse(args[1:]); err != nil {
+			if err == flag.ErrHelp {
+				return nil
+			}
 			return err
 		}
 		if strings.TrimSpace(*domain) == "" {
