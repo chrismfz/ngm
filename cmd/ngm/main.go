@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -1158,6 +1159,9 @@ func cmdCert(st store.SiteStore, cfg *config.Config, paths config.Paths, args []
 
 		fmt.Printf("Issuing certificate for %s...\n", *domain)
 		if err := core.CertIssue(ctx, *domain, *applyNow); err != nil {
+			if errors.Is(err, bootstrap.ErrProvisionInitNotCompleted) {
+				return bootstrap.ErrProvisionInitNotCompleted
+			}
 			return err
 		}
 		fmt.Println("Certificate issued successfully!")
