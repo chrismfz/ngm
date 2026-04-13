@@ -214,7 +214,7 @@ func (m *Manager) Publish(domain string) (bool, error) {
 }
 
 func (m *Manager) Reload() error {
-	// MVP: only "signal" for now; we can add systemd mode later using cfg.Nginx.Apply.ReloadMode
+	// Try reload first.
 	res, err := util.Run(10*time.Second, m.Bin, "-s", "reload")
 	if res.Stdout != "" {
 		fmt.Print(res.Stdout)
@@ -222,5 +222,38 @@ func (m *Manager) Reload() error {
 	if res.Stderr != "" {
 		fmt.Print(res.Stderr)
 	}
-	return err
+	if err == nil {
+		return nil
+	}
+
+	// Reload can fail when nginx is not running or PID file is stale/invalid.
+	// In that case, start nginx with the configured main config and only fail
+	// if startup also fails.
+	if !isReloadRecoverable(res.Stderr) {
+		return err
+	}
+
+	startRes, startErr := util.Run(10*time.Second, m.Bin, "-c", m.MainConf)
+	if startRes.Stdout != "" {
+		fmt.Print(startRes.Stdout)
+	}
+	if startRes.Stderr != "" {
+		fmt.Print(startRes.Stderr)
+	}
+	if startErr != nil {
+		return &CmdOutputError{
+			Cmd:    m.Bin + " -c " + m.MainConf,
+			Stdout: startRes.Stdout,
+			Stderr: startRes.Stderr,
+			Err:    startErr,
+		}
+	}
+	return nil
+}
+
+func isReloadRecoverable(stderr string) bool {
+	s := strings.ToLower(stderr)
+	return strings.Contains(s, "invalid pid number") ||
+		(strings.Contains(s, "open()") && strings.Contains(s, "pid")) ||
+		(strings.Contains(s, "pid") && strings.Contains(s, "no such file or directory"))
 }
