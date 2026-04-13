@@ -145,15 +145,26 @@ enable_services() {
 
 maybe_run_ngm_provision() {
   if [[ ! -f "$CFG_FILE" ]]; then
-    echo "Config file not found: $CFG_FILE"
-    echo "Skipping ngm provision init."
-    return 0
+    echo "ERROR: Config file not found: $CFG_FILE" >&2
+    echo "ERROR: Deployment aborted. Provide a valid config and re-run deployment." >&2
+    return 1
   fi
 
   if "$BIN_DIR/ngm" -c "$CFG_FILE" help provision >/dev/null 2>&1; then
-    "$BIN_DIR/ngm" -c "$CFG_FILE" provision init || true
+    if ! "$BIN_DIR/ngm" -c "$CFG_FILE" provision init; then
+      echo "ERROR: ngm provision init failed." >&2
+      echo "ERROR: Fix nginx config mismatch in $CFG_FILE before proceeding with deployment." >&2
+      return 1
+    fi
+
+    if ! "$BIN_DIR/ngm" -c "$CFG_FILE" provision test; then
+      echo "ERROR: ngm provision test failed." >&2
+      echo "ERROR: Fix nginx config mismatch in $CFG_FILE before proceeding with deployment." >&2
+      return 1
+    fi
   else
-    echo "ngm provision init not available yet; skipping automated nginx bootstrap."
+    echo "ERROR: ngm provision commands are unavailable; cannot validate nginx provisioning." >&2
+    return 1
   fi
 }
 
