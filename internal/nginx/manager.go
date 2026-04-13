@@ -7,6 +7,7 @@ import (
 	"mynginx/internal/util"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -80,6 +81,13 @@ type CmdOutputError struct {
 	Stdout string
 	Stderr string
 	Err    error
+}
+
+type PortListener struct {
+	Port    int
+	Process string
+	PID     int
+	Command string
 }
 
 func (e *CmdOutputError) Error() string {
@@ -294,6 +302,9 @@ func (m *Manager) reloadSignal() error {
 }
 
 func (m *Manager) startSignal() error {
+	if err := m.preflightUnmanagedNginxListeners(); err != nil {
+		return err
+	}
 	res, err := util.Run(10*time.Second, m.Bin, "-c", m.MainConf)
 	if res.Stdout != "" {
 		fmt.Print(res.Stdout)
@@ -332,6 +343,9 @@ func (m *Manager) reloadSystemd() error {
 }
 
 func (m *Manager) startSystemd() error {
+	if err := m.preflightUnmanagedNginxListeners(); err != nil {
+		return err
+	}
 	res, err := util.Run(10*time.Second, "systemctl", "start", m.ServiceName)
 	if res.Stdout != "" {
 		fmt.Print(res.Stdout)
@@ -372,4 +386,154 @@ func isReloadRecoverable(msg string) bool {
 	return strings.Contains(s, "invalid pid number") ||
 		(strings.Contains(s, "open()") && strings.Contains(s, "pid")) ||
 		(strings.Contains(s, "pid") && strings.Contains(s, "no such file or directory"))
+}
+
+func (m *Manager) preflightUnmanagedNginxListeners() error {
+	listeners, err := m.listCriticalPortListeners()
+	if err != nil {
+		return err
+	}
+	for _, l := range listeners {
+		if strings.EqualFold(strings.TrimSpace(l.Process), "nginx") && l.PID > 0 {
+			cmd := strings.TrimSpace(l.Command)
+			if cmd == "" || cmd == l.Process {
+				if procCmd := readProcessCommand(l.PID); procCmd != "" {
+					cmd = procCmd
+				}
+			}
+			if cmd == "" {
+				cmd = l.Process
+			}
+			return fmt.Errorf(
+				"detected unmanaged nginx listener on :%d (pid=%d, command=%q). Stop unmanaged nginx instance and start via systemd only.",
+				l.Port, l.PID, cmd,
+			)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) listCriticalPortListeners() ([]PortListener, error) {
+	if out, err := util.Run(10*time.Second, "ss", "-ltnp"); err == nil {
+		return parseSSListeners(out.Stdout), nil
+	}
+
+	out, err := util.Run(10*time.Second, "lsof", "-nP", "-iTCP:80", "-iTCP:443", "-sTCP:LISTEN")
+	if err != nil {
+		return nil, fmt.Errorf("preflight listener check failed: ss and lsof unavailable")
+	}
+	return parseLSOFListeners(out.Stdout), nil
+}
+
+func parseSSListeners(stdout string) []PortListener {
+	var out []PortListener
+	seen := map[string]bool{}
+	lines := strings.Split(stdout, "\n")
+	for _, line := range lines {
+		ln := strings.TrimSpace(line)
+		if ln == "" || strings.HasPrefix(ln, "State") {
+			continue
+		}
+		if !strings.HasPrefix(ln, "LISTEN") {
+			continue
+		}
+		fields := strings.Fields(ln)
+		if len(fields) < 5 {
+			continue
+		}
+		port := parsePort(fields[3])
+		if port != 80 && port != 443 {
+			continue
+		}
+
+		rest := strings.Join(fields[4:], " ")
+		proc, pid, cmd := parseUsersProcess(rest)
+		if proc == "" {
+			continue
+		}
+		key := fmt.Sprintf("%d:%d:%s", port, pid, proc)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, PortListener{Port: port, Process: proc, PID: pid, Command: cmd})
+	}
+	return out
+}
+
+func parseLSOFListeners(stdout string) []PortListener {
+	var out []PortListener
+	seen := map[string]bool{}
+	lines := strings.Split(stdout, "\n")
+	for _, line := range lines {
+		ln := strings.TrimSpace(line)
+		if ln == "" || strings.HasPrefix(ln, "COMMAND") {
+			continue
+		}
+		fields := strings.Fields(ln)
+		if len(fields) < 9 {
+			continue
+		}
+		proc := fields[0]
+		pid, _ := strconv.Atoi(fields[1])
+		port := parsePort(fields[8])
+		if port != 80 && port != 443 {
+			continue
+		}
+		key := fmt.Sprintf("%d:%d:%s", port, pid, proc)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, PortListener{Port: port, Process: proc, PID: pid, Command: proc})
+	}
+	return out
+}
+
+func parsePort(addr string) int {
+	addr = strings.TrimSpace(addr)
+	i := strings.LastIndex(addr, ":")
+	if i == -1 || i+1 >= len(addr) {
+		return 0
+	}
+	p, _ := strconv.Atoi(addr[i+1:])
+	return p
+}
+
+func parseUsersProcess(raw string) (string, int, string) {
+	start := strings.Index(raw, "users:((")
+	if start == -1 {
+		return "", 0, ""
+	}
+	segment := raw[start+len("users:(("):]
+	end := strings.Index(segment, "))")
+	if end == -1 {
+		return "", 0, ""
+	}
+	segment = segment[:end]
+	parts := strings.Split(segment, "\",")
+	if len(parts) == 0 {
+		return "", 0, ""
+	}
+	proc := strings.Trim(parts[0], "\" ")
+	pid := 0
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if strings.HasPrefix(p, "pid=") {
+			pid, _ = strconv.Atoi(strings.TrimPrefix(p, "pid="))
+		}
+	}
+	return proc, pid, proc
+}
+
+func readProcessCommand(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil || len(b) == 0 {
+		return ""
+	}
+	cmd := strings.ReplaceAll(string(b), "\x00", " ")
+	return strings.TrimSpace(cmd)
 }

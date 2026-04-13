@@ -409,7 +409,7 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 	applyOK := !req.ApplyNow
 	if req.ApplyNow {
 		if _, err := a.Apply(context.Background(), ApplyRequest{Domain: domain}); err != nil {
-			out.Warnings = append(out.Warnings, "apply-now failed: "+err.Error())
+			out.Warnings = append(out.Warnings, err.Error())
 		} else {
 			applyOK = true
 		}

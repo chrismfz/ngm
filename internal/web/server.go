@@ -2352,6 +2352,16 @@ const applyFormHTML = `{{define "apply_form"}}
 const applyResultHTML = `{{define "apply_result"}}
   <h2>Apply Result</h2>
   {{if .Error}}<p style="color:#b00;">{{.Error}}</p>{{end}}
+  {{with .Result}}
+    {{if .Warnings}}
+      <div style="border:1px solid #cc0; padding:10px; margin:10px 0;">
+        <div style="font-weight:700;">Warnings</div>
+        <ul>
+          {{range .Warnings}}<li>{{.}}</li>{{end}}
+        </ul>
+      </div>
+    {{end}}
+  {{end}}
 
   {{with .Result}}
     <p style="opacity:.8;">

@@ -33,6 +33,7 @@ type ApplyResult struct {
 	Domains  []ApplyDomainResult
 	Changed  []string
 	Reloaded bool
+	Warnings []string
 }
 
 type applyResultUpdater interface {
@@ -189,6 +190,7 @@ func (a *App) Apply(ctx context.Context, req ApplyRequest) (ApplyResult, error) 
 	}
 
 	if err := a.ng.ReloadOrStart(); err != nil {
+		res.Warnings = append(res.Warnings, err.Error())
 		rollbackFromBackup(a.ng, changed)
 		_ = a.ng.ReloadOrStart()
 		if updater != nil {

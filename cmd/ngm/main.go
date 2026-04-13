@@ -1347,6 +1347,9 @@ func cmdApply(st store.SiteStore, cfg *config.Config, paths config.Paths, args [
 			fmt.Println("FAIL:", r.Domain, "-", r.Error)
 		}
 	}
+	for _, w := range res.Warnings {
+		fmt.Println("WARNING:", w)
+	}
 
 	if applyErr != nil {
 		return applyErr
