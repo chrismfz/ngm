@@ -83,22 +83,50 @@ install_packages() {
 }
 
 prepare_dirs() {
-  mkdir -p "$INSTALL_DIR" "$SRC_DIR" "$BIN_DIR" "$CFG_DIR"
-  mkdir -p /var/lib/ngm /var/log/ngm
-  mkdir -p "$NGINX_ROOT/conf/sites" "$NGINX_ROOT/conf/.staging" "$NGINX_ROOT/conf/.backup"
-  mkdir -p "$NGINX_CACHE_ROOT/php" "$NGINX_CACHE_ROOT/proxy_micro" "$NGINX_CACHE_ROOT/proxy_static"
+  local -a required_paths=(
+    "$INSTALL_DIR"
+    "$SRC_DIR"
+    "$BIN_DIR"
+    "$CFG_DIR"
+    "/var/www/html"
+    "/etc/named"
+    "/var/named/ngm"
+    "/var/lib/ngm"
+    "/var/log/ngm"
+    "$NGINX_ROOT/conf/sites"
+    "$NGINX_ROOT/conf/.staging"
+    "$NGINX_ROOT/conf/.backup"
+    "$NGINX_CACHE_ROOT"
+    "$NGINX_CACHE_ROOT/php"
+    "$NGINX_CACHE_ROOT/proxy_micro"
+    "$NGINX_CACHE_ROOT/proxy_static"
+    "/run/nginx"
+  )
+
+  local path
+  for path in "${required_paths[@]}"; do
+    mkdir -p "$path"
+  done
+
+  # Keep certbot webroot aligned with runtime defaults unless explicitly overridden.
   mkdir -p "$CERTBOT_WEBROOT"
 
-  # BIND-related dirs if you plan to enable DNS later
-  mkdir -p /etc/named
-  mkdir -p /var/named/ngm || true
-
-  # Cache dirs should be writable by the nginx runtime identity model
+  # ACME webroot and cache dirs should be writable by the nginx runtime identity model.
+  chown "${NGINX_USER}:${NGINX_GROUP}" "$CERTBOT_WEBROOT" || true
+  chmod 0755 "$CERTBOT_WEBROOT" || true
   chown -R "${NGINX_USER}:${NGINX_GROUP}" "$NGINX_CACHE_ROOT" || true
   chmod 0755 "$NGINX_CACHE_ROOT" \
              "$NGINX_CACHE_ROOT/php" \
              "$NGINX_CACHE_ROOT/proxy_micro" \
              "$NGINX_CACHE_ROOT/proxy_static" || true
+
+  printf 'prepare_dirs created/validated %d paths:\n' "${#required_paths[@]}"
+  for path in "${required_paths[@]}"; do
+    printf '  - %s\n' "$path"
+  done
+  if [[ "$CERTBOT_WEBROOT" != "/var/www/html" ]]; then
+    printf '  - %s\n' "$CERTBOT_WEBROOT"
+  fi
 }
 
 clone_or_update_repo() {
