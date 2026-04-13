@@ -48,6 +48,8 @@ NGINX_SITES_DIR="conf/sites"
 NGINX_BIN="/usr/sbin/nginx"
 NGINX_SERVICE="nginx"
 NGINX_CACHE_ROOT="/var/cache/nginx"
+NGM_SYSTEMD_UNIT_SRC="configs/ngm.service"
+NGM_SYSTEMD_UNIT_DEST="/etc/systemd/system/ngm.service"
 
 # ACME webroot default
 CERTBOT_WEBROOT="/var/www/html"
@@ -169,8 +171,24 @@ enable_services() {
   if [[ "$DNS_ENABLED" == "true" ]]; then
     systemctl enable --now named
   fi
+}
 
-  # nginx is usually provisioned/tested first; do not force-start it here
+install_service_units() {
+  local repo_unit_path="$SRC_DIR/$NGM_SYSTEMD_UNIT_SRC"
+  if [[ ! -f "$repo_unit_path" ]]; then
+    echo "ERROR: Service unit file not found: $repo_unit_path" >&2
+    return 1
+  fi
+
+  install -m 0644 "$repo_unit_path" "$NGM_SYSTEMD_UNIT_DEST"
+  systemctl daemon-reload
+  systemctl enable "$NGINX_SERVICE"
+  systemctl enable ngm
+}
+
+start_runtime_services() {
+  systemctl start "$NGINX_SERVICE"
+  systemctl start ngm
 }
 
 disable_firewalld_if_requested() {
@@ -239,6 +257,7 @@ Suggested checks:
   "$BIN_DIR/ngm" -c "$CFG_FILE" help
   "$BIN_DIR/ngm" -c "$CFG_FILE" provision test
   systemctl status $PHP_SERVICE
+  systemctl status nginx ngm --no-pager
   ls -ld $PHP_POOLS_DIR $PHP_SOCK_DIR
   getenforce || true
 
@@ -251,10 +270,12 @@ main() {
   prepare_dirs
   clone_or_update_repo
   build_ngm
+  install_service_units
   configure_selinux_for_home_sites
   disable_firewalld_if_requested
   enable_services
   maybe_run_ngm_provision
+  start_runtime_services
   print_next_steps
 }
 
