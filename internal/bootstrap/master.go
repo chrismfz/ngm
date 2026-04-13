@@ -16,6 +16,7 @@ var templateFS embed.FS
 
 type masterTemplateData struct {
 	NginxUser            string
+	NginxGroup           string
 	TLSCert              string
 	TLSKey               string
 	SitesIncludeGlob     string
@@ -33,6 +34,7 @@ func RenderMasterConfig(cfg *config.Config, paths config.Paths, certPath, keyPat
 
 	data := masterTemplateData{
 		NginxUser:            cfg.Nginx.User,
+		NginxGroup:           cfg.Nginx.Group,
 		TLSCert:              certPath,
 		TLSKey:               keyPath,
 		SitesIncludeGlob:     filepath.Join(paths.NginxSitesDir, "*.conf"),

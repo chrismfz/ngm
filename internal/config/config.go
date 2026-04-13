@@ -172,7 +172,7 @@ func (c *Config) applyDefaults() {
 		c.Nginx.User = "www-data"
 	}
 	if c.Nginx.Group == "" {
-		c.Nginx.Group = "www-data"
+		c.Nginx.Group = "nobody"
 	}
 	if c.Nginx.Apply.StagingDir == "" {
 		c.Nginx.Apply.StagingDir = "conf/.staging"

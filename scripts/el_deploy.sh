@@ -245,7 +245,11 @@ prepare_dirs() {
     "$NGINX_CACHE_ROOT/php" \
     "$NGINX_CACHE_ROOT/proxy_micro" \
     "$NGINX_CACHE_ROOT/proxy_static" || true
-usermod -aG nobody nginx
+  if [[ -n "${NGINX_USER:-}" && -n "${NGINX_GROUP:-}" ]] \
+    && id -u "$NGINX_USER" >/dev/null 2>&1 \
+    && getent group "$NGINX_GROUP" >/dev/null 2>&1; then
+    usermod -aG "$NGINX_GROUP" "$NGINX_USER" || true
+  fi
   log "prepare_dirs created/validated ${#seen[@]} unique paths"
   for path in "${!seen[@]}"; do
     printf '  - %s\n' "$path"

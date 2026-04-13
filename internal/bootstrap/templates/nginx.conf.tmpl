@@ -1,4 +1,8 @@
-user {{ .NginxUser }}  nobody;
+{{- if .NginxGroup }}
+user {{ .NginxUser }} {{ .NginxGroup }};
+{{- else }}
+user {{ .NginxUser }};
+{{- end }}
 worker_processes auto;
 worker_rlimit_nofile 65535;
 
