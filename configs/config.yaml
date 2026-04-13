@@ -24,6 +24,8 @@ nginx:
     staging_dir: "conf/.staging"
     backup_dir: "conf/.backup"
     test_before_reload: true
+    # Use "systemd" for standard distro-managed nginx services.
+    # Keep "signal" only when nginx is managed directly by binary/pid files.
     reload_mode: "signal"
 
 certs:
