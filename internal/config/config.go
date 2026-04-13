@@ -186,6 +186,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Nginx.Apply.ReloadMode == "" {
 		c.Nginx.Apply.ReloadMode = "signal"
+		if st, err := os.Stat("/run/systemd/system"); err == nil && st.IsDir() {
+			c.Nginx.Apply.ReloadMode = "systemd"
+		}
 	}
 
 	// Certs

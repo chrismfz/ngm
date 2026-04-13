@@ -46,6 +46,7 @@ func (m *Manager) SetControlMode(mode, serviceName string) {
 		serviceName = "nginx"
 	}
 	m.ServiceName = serviceName
+	fmt.Printf("nginx control mode: %s (service: %s)\n", m.ReloadMode, m.ServiceName)
 }
 
 // EnsureLayout creates the required directories for generated configs.
@@ -264,6 +265,9 @@ func (m *Manager) ReloadOrStart() error {
 			if !isReloadRecoverable(err.Error()) {
 				return err
 			}
+			if systemdManagedHost() {
+				return fmt.Errorf("nginx reload failed with an invalid pid while reload_mode=signal on a systemd-managed host; set nginx.apply.reload_mode=systemd (service_name=%q) to migrate safely", m.ServiceName)
+			}
 			fmt.Println("nginx reload failed; service inactive, attempting start...")
 			if startErr := m.startSignal(); startErr != nil {
 				return fmt.Errorf("nginx start failed after reload fallback: %w", startErr)
@@ -372,4 +376,9 @@ func isReloadRecoverable(msg string) bool {
 	return strings.Contains(s, "invalid pid number") ||
 		(strings.Contains(s, "open()") && strings.Contains(s, "pid")) ||
 		(strings.Contains(s, "pid") && strings.Contains(s, "no such file or directory"))
+}
+
+func systemdManagedHost() bool {
+	st, err := os.Stat("/run/systemd/system")
+	return err == nil && st.IsDir()
 }
