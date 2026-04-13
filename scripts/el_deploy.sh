@@ -13,6 +13,7 @@ set -euo pipefail
 #   RUNTIME_DIR=/opt/ngm
 #   CFG_FILE=/opt/ngm/config.yaml
 #   DNS_ENABLED=true
+#   FIREWALLD_DISABLE=true
 #
 # Example:
 #   chmod +x bootstrap_ngm_el10_nobody.sh
@@ -32,6 +33,7 @@ NGINX_GROUP="nobody"
 
 # Optional feature toggles
 DNS_ENABLED="${DNS_ENABLED:-false}"
+FIREWALLD_DISABLE="${FIREWALLD_DISABLE:-true}"
 
 # Remi PHP 8.3 layout
 PHP_VERSION="8.3"
@@ -171,6 +173,21 @@ enable_services() {
   # nginx is usually provisioned/tested first; do not force-start it here
 }
 
+disable_firewalld_if_requested() {
+  if [[ "$FIREWALLD_DISABLE" != "true" ]]; then
+    echo "firewalld disable skipped: FIREWALLD_DISABLE=$FIREWALLD_DISABLE"
+    return 0
+  fi
+
+  if ! systemctl list-unit-files | grep -q 'firewalld'; then
+    echo "firewalld disable skipped: firewalld unit file not present."
+    return 0
+  fi
+
+  systemctl disable --now firewalld
+  echo "firewalld disabled and stopped."
+}
+
 maybe_run_ngm_provision() {
   if [[ ! -f "$CFG_FILE" ]]; then
     echo "ERROR: Config file not found: $CFG_FILE" >&2
@@ -235,6 +252,7 @@ main() {
   clone_or_update_repo
   build_ngm
   configure_selinux_for_home_sites
+  disable_firewalld_if_requested
   enable_services
   maybe_run_ngm_provision
   print_next_steps
