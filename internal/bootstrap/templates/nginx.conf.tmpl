@@ -32,6 +32,25 @@ http {
     proxy_cache_path   {{ .ProxyStaticCachePath }} levels=1:2 keys_zone=proxy_static:128m inactive=30d max_size=2g use_temp_path=off;
 
     server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        server_name _;
+
+        root /var/www/html;
+
+        location ^~ /.well-known/acme-challenge/ {
+            default_type text/plain;
+            try_files $uri =404;
+        }
+
+        location / {
+            return 444;
+        }
+    }
+
+    server {
+        listen 443 ssl default_server;
+        listen [::]:443 ssl default_server;
         listen 443 quic reuseport;
         server_name _;
 
