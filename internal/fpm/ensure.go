@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-        "mynginx/internal/util"
+	"mynginx/internal/util"
 )
 
 var nonIdent = regexp.MustCompile(`[^a-zA-Z0-9_]+`)
@@ -42,29 +42,29 @@ func EnsurePool(poolsDir, service, sockDir, domain, phpVersion string, td PoolDa
 	if domain == "" {
 		return "", false, fmt.Errorf("domain required")
 	}
-        if poolsDir == "" || service == "" || sockDir == "" || phpVersion == "" {
-                return "", false, fmt.Errorf("poolsDir/service/sockDir/phpVersion required")
+	if poolsDir == "" || service == "" || sockDir == "" || phpVersion == "" {
+		return "", false, fmt.Errorf("poolsDir/service/sockDir/phpVersion required")
 	}
 
-        // Always use deterministic per-domain socket
-        td.Socket = SocketPath(sockDir, domain, phpVersion)
+	// Always use deterministic per-domain socket
+	td.Socket = SocketPath(sockDir, domain, phpVersion)
 
 	// Ensure dirs exist for logs/slowlogs (php-fpm will create files, but directory must exist)
 	if td.ErrorLog != "" {
-                _ = util.MkdirAll(filepath.Dir(td.ErrorLog), 0755)
+		_ = util.MkdirAll(filepath.Dir(td.ErrorLog), 0755)
 	}
 	if td.SlowlogPath != "" {
-                _ = util.MkdirAll(filepath.Dir(td.SlowlogPath), 0755)
+		_ = util.MkdirAll(filepath.Dir(td.SlowlogPath), 0755)
 	}
 
-	pm := &PoolManager{} // uses default internal/fpm/templates/pool.tmpl
+	pm := &PoolManager{} // uses embedded default template
 	rendered, err := pm.Render(td)
 	if err != nil {
 		return "", false, err
 	}
 
 	outPath := PoolFilePath(poolsDir, domain)
-        _ = util.MkdirAll(filepath.Dir(outPath), 0755)
+	_ = util.MkdirAll(filepath.Dir(outPath), 0755)
 
 	if old, err := os.ReadFile(outPath); err == nil {
 		if bytes.Equal(old, rendered) {

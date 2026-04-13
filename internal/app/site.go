@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -130,6 +131,25 @@ func normalizeDomain(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+var domainLabelRe = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+
+func isLikelyFQDN(domain string) bool {
+	domain = normalizeDomain(domain)
+	if domain == "" || strings.Contains(domain, " ") || strings.Contains(domain, "..") {
+		return false
+	}
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") || !strings.Contains(domain, ".") {
+		return false
+	}
+	parts := strings.Split(domain, ".")
+	for _, p := range parts {
+		if len(p) < 1 || len(p) > 63 || !domainLabelRe.MatchString(p) {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *App) validateParentDomain(owner store.User, domain, parentDomain string) (store.Site, string, error) {
 	parentDomain = normalizeDomain(parentDomain)
 	domain = normalizeDomain(domain)
@@ -219,6 +239,12 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 	parentDomain := normalizeDomain(req.ParentDomain)
 	if user == "" || domain == "" {
 		return out, fmt.Errorf("required: user and domain")
+	}
+	if !isLikelyFQDN(domain) {
+		return out, fmt.Errorf("invalid domain %q: expected a fully qualified domain name like example.com", domain)
+	}
+	if parentDomain != "" && !isLikelyFQDN(parentDomain) {
+		return out, fmt.Errorf("invalid parent domain %q: expected a root domain like example.com", parentDomain)
 	}
 
 	mode := strings.TrimSpace(req.Mode)
@@ -348,18 +374,28 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 	}
 
 	// Bootstrap vhost immediately so HTTP-01 can work (unless disabled).
+	applyOK := !req.ApplyNow
 	if req.ApplyNow {
 		if _, err := a.Apply(context.Background(), ApplyRequest{Domain: domain}); err != nil {
 			out.Warnings = append(out.Warnings, "apply-now failed: "+err.Error())
+		} else {
+			applyOK = true
 		}
 	}
 
 	// Issue certificate automatically (unless skipped).
 	if !req.SkipCert {
-		ctx2, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		if err := a.CertIssue(ctx2, domain, true /* apply */); err != nil {
-			out.Warnings = append(out.Warnings, "certificate issuance failed: "+err.Error())
+		switch {
+		case !req.ApplyNow:
+			out.Warnings = append(out.Warnings, "certificate issuance skipped: apply-now is disabled; apply the site first, then issue cert")
+		case !applyOK:
+			out.Warnings = append(out.Warnings, "certificate issuance skipped: apply-now failed; fix apply errors before issuing cert")
+		default:
+			ctx2, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if err := a.CertIssue(ctx2, domain, true /* apply */); err != nil {
+				out.Warnings = append(out.Warnings, "certificate issuance failed: "+err.Error())
+			}
 		}
 	}
 
@@ -418,6 +454,9 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 	d := normalizeDomain(req.Domain)
 	if d == "" {
 		return store.Site{}, fmt.Errorf("domain is required")
+	}
+	if !isLikelyFQDN(d) {
+		return store.Site{}, fmt.Errorf("invalid domain %q: expected a fully qualified domain name like example.com", d)
 	}
 
 	cur, err := a.st.GetSiteByDomain(d)
@@ -479,6 +518,9 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 	}
 	if req.ParentDomainSet {
 		newParent = normalizeDomain(req.ParentDomain)
+		if newParent != "" && !isLikelyFQDN(newParent) {
+			return store.Site{}, fmt.Errorf("invalid parent domain %q: expected a root domain like example.com", newParent)
+		}
 	}
 	_, label, err := a.validateParentDomain(owner, d, newParent)
 	if err != nil {
