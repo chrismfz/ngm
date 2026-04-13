@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -74,9 +75,10 @@ type SiteEditRequest struct {
 }
 
 type SiteListItem struct {
-	Site  store.Site
-	State string // OK|PENDING|ERROR|DISABLED
-	Last  string // formatted last applied (or "-")
+	Site      store.Site
+	State     string // OK|PENDING|ERROR|DISABLED
+	Last      string // formatted last applied (or "-")
+	DNSStatus string // zone|record|missing|error|disabled
 }
 
 func phpOverridesPathFromWebroot(webroot string) string {
@@ -314,6 +316,12 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 		}
 	}
 
+	_, preExistingErr := a.st.GetSiteByDomain(domain)
+	siteCreated := errors.Is(preExistingErr, sql.ErrNoRows)
+	if preExistingErr != nil && !siteCreated {
+		return out, preExistingErr
+	}
+
 	s, err := a.st.UpsertSite(store.Site{
 		UserID:            u.ID,
 		Domain:            domain,
@@ -334,10 +342,20 @@ func (a *App) SiteAdd(ctx context.Context, req SiteAddRequest) (SiteAddResult, e
 		dnsIn := a.siteDNSInputFromParts(domain, parentDomain)
 		if parentDomain == "" {
 			if err := a.dns.EnsureRootSite(ctx, dnsIn); err != nil {
+				if siteCreated {
+					if derr := a.st.DeleteSiteByDomain(domain); derr != nil {
+						return out, fmt.Errorf("dns ensure root site: %v; compensation delete failed: %w", err, derr)
+					}
+				}
 				return out, fmt.Errorf("dns ensure root site: %w", err)
 			}
 		} else {
 			if err := a.dns.EnsureSubdomainSite(ctx, dnsIn); err != nil {
+				if siteCreated {
+					if derr := a.st.DeleteSiteByDomain(domain); derr != nil {
+						return out, fmt.Errorf("dns ensure subdomain site: %v; compensation delete failed: %w", err, derr)
+					}
+				}
 				return out, fmt.Errorf("dns ensure subdomain site: %w", err)
 			}
 		}
@@ -482,7 +500,25 @@ func (a *App) SiteDelete(ctx context.Context, domain string) error {
 	}
 
 	// Hard delete from DB (handles proxy_targets/apply_runs too)
-	return a.st.DeleteSiteByDomain(domain)
+	if err := a.st.DeleteSiteByDomain(domain); err != nil {
+		if a.dns != nil {
+			restoreIn := a.siteDNSInputFromParts(site.Domain, "")
+			if site.ParentDomain != nil && strings.TrimSpace(*site.ParentDomain) != "" {
+				restoreIn = a.siteDNSInputFromParts(site.Domain, strings.TrimSpace(*site.ParentDomain))
+			}
+			var rerr error
+			if restoreIn.SiteKind == appdns.SiteKindRoot {
+				rerr = a.dns.EnsureRootSite(ctx, restoreIn)
+			} else {
+				rerr = a.dns.EnsureSubdomainSite(ctx, restoreIn)
+			}
+			if rerr != nil {
+				return fmt.Errorf("delete site row: %v; dns restore failed: %w", err, rerr)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, error) {
@@ -557,6 +593,15 @@ func (a *App) SiteEdit(ctx context.Context, req SiteEditRequest) (store.Site, er
 		newParent = normalizeDomain(req.ParentDomain)
 		if newParent != "" && !isLikelyFQDN(newParent) {
 			return store.Site{}, fmt.Errorf("invalid parent domain %q: expected a root domain like example.com", newParent)
+		}
+	}
+	if a.dns != nil && req.ParentDomainSet {
+		curParent := ""
+		if cur.ParentDomain != nil {
+			curParent = normalizeDomain(*cur.ParentDomain)
+		}
+		if normalizeDomain(newParent) != curParent {
+			return store.Site{}, fmt.Errorf("changing parent domain is not supported while dns.enabled=true in this phase")
 		}
 	}
 	_, label, err := a.validateParentDomain(owner, d, newParent)
@@ -686,7 +731,65 @@ func (a *App) SiteList(ctx context.Context) ([]SiteListItem, error) {
 	out := make([]SiteListItem, 0, len(sites))
 	for _, s := range sites {
 		state, last := computeSiteState(s)
-		out = append(out, SiteListItem{Site: s, State: state, Last: last})
+		dnsStatus := "disabled"
+		if a.dns != nil {
+			parent := ""
+			if s.ParentDomain != nil {
+				parent = strings.TrimSpace(*s.ParentDomain)
+			}
+			entry, err := a.dns.GetSiteEntry(ctx, a.siteDNSInputFromParts(s.Domain, parent))
+			if err != nil {
+				dnsStatus = "error"
+			} else {
+				dnsStatus = entry.Status
+			}
+		}
+		out = append(out, SiteListItem{Site: s, State: state, Last: last, DNSStatus: dnsStatus})
+	}
+	return out, nil
+}
+
+func (a *App) DNSList(ctx context.Context, domainFilter string) ([]appdns.DNSEntry, error) {
+	sites, err := a.st.ListSites()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]appdns.DNSEntry, 0, len(sites))
+	filter := normalizeDomain(domainFilter)
+	for _, s := range sites {
+		if filter != "" && normalizeDomain(s.Domain) != filter {
+			continue
+		}
+		parent := ""
+		if s.ParentDomain != nil {
+			parent = strings.TrimSpace(*s.ParentDomain)
+		}
+		in := a.siteDNSInputFromParts(s.Domain, parent)
+		if a.dns == nil {
+			zone := in.ParentDomain
+			if zone == "" {
+				zone = in.FQDN
+			}
+			out = append(out, appdns.DNSEntry{
+				FQDN:   normalizeDomain(s.Domain),
+				Zone:   zone,
+				Kind:   string(in.SiteKind),
+				Status: "disabled",
+			})
+			continue
+		}
+		entry, err := a.dns.GetSiteEntry(ctx, in)
+		if err != nil {
+			out = append(out, appdns.DNSEntry{
+				FQDN:     normalizeDomain(s.Domain),
+				Zone:     in.ParentDomain,
+				Kind:     string(in.SiteKind),
+				Status:   "error",
+				ZoneFile: entry.ZoneFile,
+			})
+			continue
+		}
+		out = append(out, entry)
 	}
 	return out, nil
 }

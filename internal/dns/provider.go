@@ -7,4 +7,5 @@ type Provider interface {
 	EnsureSubdomainSite(ctx context.Context, in SiteDNSInput) error
 	DeleteRootSite(ctx context.Context, in SiteDNSInput) error
 	DeleteSubdomainSite(ctx context.Context, in SiteDNSInput) error
+	GetSiteEntry(ctx context.Context, in SiteDNSInput) (DNSEntry, error)
 }
