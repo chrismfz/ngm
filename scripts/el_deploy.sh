@@ -10,7 +10,8 @@ set -euo pipefail
 # Optional env overrides:
 #   REPO_URL=...
 #   INSTALL_DIR=/opt/ngm
-#   CFG_FILE=/opt/ngm/etc/config.yaml
+#   RUNTIME_DIR=/opt/ngm
+#   CFG_FILE=/opt/ngm/config.yaml
 #   DNS_ENABLED=true
 #
 # Example:
@@ -20,9 +21,10 @@ set -euo pipefail
 REPO_URL="${REPO_URL:-https://github.com/chrismfz/ngm.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ngm}"
 SRC_DIR="${SRC_DIR:-$INSTALL_DIR/src}"
-BIN_DIR="${BIN_DIR:-$INSTALL_DIR/bin}"
-CFG_DIR="${CFG_DIR:-$INSTALL_DIR/etc}"
-CFG_FILE="${CFG_FILE:-$CFG_DIR/config.yaml}"
+RUNTIME_DIR="${RUNTIME_DIR:-$INSTALL_DIR}"
+BIN_DIR="$RUNTIME_DIR"
+CFG_DIR="$RUNTIME_DIR"
+CFG_FILE="${CFG_FILE:-$RUNTIME_DIR/config.yaml}"
 
 # Hardcoded runtime identity model for this script
 NGINX_USER="nginx"
@@ -148,7 +150,7 @@ maybe_run_ngm_provision() {
     return 0
   fi
 
-  if "$BIN_DIR/ngm" help provision >/dev/null 2>&1; then
+  if "$BIN_DIR/ngm" -c "$CFG_FILE" help provision >/dev/null 2>&1; then
     "$BIN_DIR/ngm" -c "$CFG_FILE" provision init || true
   else
     echo "ngm provision init not available yet; skipping automated nginx bootstrap."
@@ -161,6 +163,7 @@ print_next_steps() {
 Bootstrap complete.
 
 Key paths:
+  Runtime dir: $RUNTIME_DIR
   NGM binary : $BIN_DIR/ngm
   Config     : $CFG_FILE
   PHP pools  : $PHP_POOLS_DIR
@@ -177,8 +180,8 @@ Notes:
 - If DNS_ENABLED=false, bind was still installed, but named was not enabled.
 
 Suggested checks:
-  $BIN_DIR/ngm -c $CFG_FILE help
-  $BIN_DIR/ngm -c $CFG_FILE provision test
+  "$BIN_DIR/ngm" -c "$CFG_FILE" help
+  "$BIN_DIR/ngm" -c "$CFG_FILE" provision test
   systemctl status $PHP_SERVICE
   ls -ld $PHP_POOLS_DIR $PHP_SOCK_DIR
   getenforce || true
