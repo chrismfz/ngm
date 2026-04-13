@@ -188,11 +188,6 @@ install_service_units() {
   systemctl enable ngm
 }
 
-start_runtime_services() {
-  systemctl start "$NGINX_SERVICE"
-  systemctl start ngm
-}
-
 disable_firewalld_if_requested() {
   if [[ "$FIREWALLD_DISABLE" != "true" ]]; then
     echo "firewalld disable skipped: FIREWALLD_DISABLE=$FIREWALLD_DISABLE"
@@ -209,26 +204,6 @@ disable_firewalld_if_requested() {
 }
 
 maybe_run_ngm_provision() {
-  local default_cfg_template="$SRC_DIR/configs/config.yaml"
-
-  if [[ ! -f "$CFG_FILE" ]]; then
-    if [[ ! -f "$default_cfg_template" ]]; then
-      echo "ERROR: Config file not found at resolved CFG_FILE path: $CFG_FILE" >&2
-      echo "ERROR: Default template not found at: $default_cfg_template" >&2
-      echo "ERROR: Example fix: install -m 0644 ./config.yaml \"$CFG_FILE\"" >&2
-      echo "ERROR: Deployment aborted. Provide a valid config at $CFG_FILE and re-run deployment." >&2
-      return 1
-    fi
-
-    install -m 0644 "$default_cfg_template" "$CFG_FILE"
-    echo "INFO: Installed default config template from $default_cfg_template to $CFG_FILE"
-
-    if grep -q 'change-me-please' "$CFG_FILE"; then
-      echo "WARNING: Config contains placeholder values (e.g., change-me-please)." >&2
-      echo "WARNING: Update and harden $CFG_FILE before using in production." >&2
-    fi
-  fi
-
   if "$BIN_DIR/ngm" -c "$CFG_FILE" help provision >/dev/null 2>&1; then
     if ! "$BIN_DIR/ngm" -c "$CFG_FILE" provision init; then
       echo "ERROR: ngm provision init failed." >&2
@@ -244,6 +219,47 @@ maybe_run_ngm_provision() {
   else
     echo "ERROR: ngm provision commands are unavailable; cannot validate nginx provisioning." >&2
     return 1
+  fi
+}
+
+ensure_runtime_config() {
+  local default_cfg_template="$SRC_DIR/configs/config.yaml"
+
+  if [[ -f "$CFG_FILE" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "$default_cfg_template" ]]; then
+    echo "ERROR: Config file not found at resolved CFG_FILE path: $CFG_FILE" >&2
+    echo "ERROR: Default template not found at: $default_cfg_template" >&2
+    echo "ERROR: Example fix: install -m 0644 ./config.yaml \"$CFG_FILE\"" >&2
+    echo "ERROR: Deployment aborted. Provide a valid config at $CFG_FILE and re-run deployment." >&2
+    return 1
+  fi
+
+  install -m 0644 "$default_cfg_template" "$CFG_FILE"
+  echo "INFO: Installed default config template from $default_cfg_template to $CFG_FILE"
+
+  if grep -q 'change-me-please' "$CFG_FILE"; then
+    echo "WARNING: Config contains placeholder values (e.g., change-me-please)." >&2
+    echo "WARNING: Update and harden $CFG_FILE before using in production." >&2
+  fi
+}
+
+ask_hostname_certificate() {
+  local host=""
+  host="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
+  host="${host,,}"
+
+  if [[ -z "$host" || "$host" == "localhost" ]]; then
+    echo "INFO: certificate request skipped: unable to resolve a usable hostname."
+    return 0
+  fi
+
+  if "$BIN_DIR/ngm" -c "$CFG_FILE" cert issue --domain "$host"; then
+    echo "INFO: certificate request succeeded for hostname: $host"
+  else
+    echo "WARN: certificate request failed for hostname: $host" >&2
   fi
 }
 
@@ -287,12 +303,15 @@ main() {
   prepare_dirs
   clone_or_update_repo
   build_ngm
+  ensure_runtime_config
+  maybe_run_ngm_provision
   install_service_units
   configure_selinux_for_home_sites
-  disable_firewalld_if_requested
   enable_services
-  maybe_run_ngm_provision
-  start_runtime_services
+  systemctl start "$NGINX_SERVICE"
+  disable_firewalld_if_requested
+  systemctl start ngm
+  ask_hostname_certificate
   print_next_steps
 }
 
