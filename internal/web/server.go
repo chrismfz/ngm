@@ -2029,15 +2029,37 @@ const menuHTML = `{{define "menu"}}
 {{end}}`
 
 const loginHTML = `{{define "login"}}
-<div class="card stack" style="max-width:520px;margin:4rem auto;">
-  <h2>NGM Panel Login</h2>
-  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
-  <form method="post" action="/ui/login" class="stack">
-    <div><label>Username</label><input class="input" name="username" /></div>
-    <div><label>Password</label><input class="input" type="password" name="password" /></div>
-    <button class="btn btn-primary">Login</button>
-  </form>
-</div>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NGM Panel Login</title>
+  <link rel="stylesheet" href="/static/panel.css" />
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-card" aria-labelledby="login-title">
+      <header class="login-brand">
+        <div class="login-mark" aria-hidden="true">N</div>
+        <h1 id="login-title">NGM Panel</h1>
+        <p>Network &amp; Hosting Operations</p>
+      </header>
+      {{if .Error}}<div class="alert alert-error login-alert" role="alert">{{.Error}}</div>{{end}}
+      <form method="post" action="/ui/login" class="login-form" autocomplete="on">
+        <label for="login-username">Username</label>
+        <input id="login-username" class="input login-input" name="username" autocomplete="username" required />
+
+        <label for="login-password">Password</label>
+        <input id="login-password" class="input login-input" type="password" name="password" autocomplete="current-password" required />
+
+        <button class="btn btn-primary login-submit" type="submit">Sign in</button>
+      </form>
+      <p class="login-note">Authorized access only.</p>
+    </section>
+  </main>
+</body>
+</html>
 {{end}}`
 
 const dashboardHTML = `{{define "dashboard"}}
